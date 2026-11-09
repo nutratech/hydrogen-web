@@ -64,7 +64,7 @@
     "@matrix-org/olm": "^3.2.15",
     "another-json": "^0.2.0",
     "base64-arraybuffer": "^0.2.0",
-    "dompurify": "^2.3.0",
+    "dompurify": "^3.4.17",
     "off-color": "^2.0.0"
   }
 }
