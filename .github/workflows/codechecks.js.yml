@@ -45,3 +45,5 @@ jobs:
       run: yarn run lint-ci
     - name: Typescript
       run: yarn run tsc
+    - name: Build
+      run: yarn build
