@@ -62,32 +62,34 @@ Nothing has run against a real homeserver yet; `../congruent` will be the first.
 
 - [ ] **Secret storage for the rotation key.** The key currently lives in
       IndexedDB and the localStorage backup. Hydrogen's SSSS implementation can
-      read secrets but does not write them. Add SSSS writing and backup/restore;
-      no Cygnus-specific homeserver endpoint is needed. The proposal still needs
-      to specify the stored key encoding (Hydrogen has a 32-byte seed) and make
-      clear that only one active signer/device may hold the current rotation
-      key, to avoid concurrent chain advances.
+      read secrets but does not write them. Add SSSS writing and backup/restore.
+      The proposal now specifies a 32-byte RFC 8032 seed in unpadded standard
+      base64 and one active signer at a time; the client must re-read the secret
+      before signing and write the next key before submitting. No
+      Cygnus-specific homeserver endpoint is needed.
 - [ ] **Revoked-device list.** Hydrogen always sends `[]` on import. Track
       device revocations locally and carry them across moves. `send_signed` on
       the homeserver must reject revoked devices through standard device
-      management. Clarify in the proposal that the certificate's `device_id` is
-      the Matrix device ID and whether revocation remains permanent if that ID
-      is later reused with a new key.
+      management. The proposal now makes the certificate `device_id` the Matrix
+      device ID and revocation permanent, so a new device must use a fresh ID.
 - [ ] **Stale-epoch heuristic.** Implement the client check against the newest
-      observed epochs. Fix the proposal's normative mismatch: `event_draft`
-      currently says MUST apply this check, while the heuristic section says
-      SHOULD. Keep the device floor mandatory and make the epoch check SHOULD
-      in both direct and assisted signing.
+      observed epochs. The proposal now makes the device floor mandatory and the
+      epoch check SHOULD in both direct and assisted signing.
 - [ ] **Device floors per room and device.** Hydrogen currently keys floors by
       room only; the proposal requires `(user, device_id, room)`. In Cygnus
       rooms, key the user component by principal.
+- [ ] **Client-side API contract work.** Send `via` when drafting a join to a
+      room the homeserver has no joined user in; send the full chain when moving
+      to a new custodian; after import, draft and send a device-signed rebinding
+      join in each room; and replace the "spec gap" comments in `CygnusRooms`
+      and `CygnusIdentity` with references to the §9 contract.
 
 ## Spec decisions recorded; homeserver implementation pending
 
 - [x] **Epoch events after create and join — specified.** The proposal now says
       the custodian emits/signs epoch events and the client signs the join, and
-      defines the create/join ordering. Still implement the contract in
-      Hydrogen and the homeserver.
+      defines the create/join ordering. Still implement the contract in Hydrogen
+      and the homeserver.
 - [x] **Starting a join from the client — specified.** The proposal now defines
       pre-join `event_draft` with `via`, `make_join`, epoch events, and
       `send_join`. Still implement the client and homeserver flow.
