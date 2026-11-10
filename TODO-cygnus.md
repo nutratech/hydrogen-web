@@ -1,19 +1,20 @@
 # Cygnus (MSC00FC) — what's still missing
 
-Status: identity creation, key rotation, creating and joining rooms, and signed
-messages/redactions work against mocks
-(`src/matrix/cygnus/CygnusFlows.test.js`). Nothing has run against a real
-homeserver yet; `../congruent` will be the first.
+Status: identity creation, key rotation, creating and joining rooms, signed
+messages/redactions, signed leave/rejoin, Cygnus room indicators, and own-sender
+recognition work against mocks (`src/matrix/cygnus/CygnusFlows.test.js`).
+Nothing has run against a real homeserver yet; `../congruent` will be the first.
 
 ## Broken today in Cygnus rooms
 
-- [ ] **Own messages look like someone else's.** The sender of your events is
+- [x] **Own messages look like someone else's.** The sender of your events is
       your principal (`@<root>`), not your Matrix ID. About 57 comparisons in 9
       files under `src/matrix/room` and `src/domain/session/room` check
       `sender === ownUserId`, so own messages render as another user's, can't be
       edited or redacted from the menu, and may mark the room unread. Fix: give
       rooms an "own sender IDs" set (Matrix ID + principal) and compare against
-      it.
+      it. Implemented by recognizing both the Matrix ID and principal in room
+      summaries, timelines, reactions, power checks, and verification handling.
 - [x] **Leave uses the plain `/leave`** (`Room.js` `leave`). It must be a
       device-signed `m.room.member` `leave` through `cygnus.sendRoomEvent`-style
       state sending.
@@ -48,31 +49,59 @@ homeserver yet; `../congruent` will be the first.
       incoming events aren't verified.
 - [ ] **Member panel.** Show each member's principal, custodian and chain
       height.
-- [ ] **Moving homeservers.** `/principal/import` is used only for rotation;
-      there's no UI to import a principal into a new custodian.
+- [ ] **Moving homeservers.** The API contract now covers `/principal/import`
+      for moves and same-custodian advancement, but there's no UI to move a
+      principal into a new custodian.
 - [ ] **Recovery.** No UI to back up or restore the rotation key, and no warning
       before a cross-signing reset (which permanently breaks the principal — its
       master key is the cross-signing master key).
 - [ ] **Errors.** Draft rejections ("refusing to sign the homeserver's draft:
       …") show as raw strings; make them readable and offer retry.
 
-## Protocol pieces not implemented
+## Client and homeserver protocol work
 
-- [ ] Rotation key in secret storage (`m.principal.rotation_key`). It only lives
-      in IndexedDB and the localStorage backup on this device; Hydrogen can't
-      write SSSS.
-- [ ] Revoked-device list is always `[]`.
-- [ ] Stale-epoch heuristic.
-- [ ] Device floors are keyed per room only, not per room + device.
+- [ ] **Secret storage for the rotation key.** The key currently lives in
+      IndexedDB and the localStorage backup. Hydrogen's SSSS implementation can
+      read secrets but does not write them. Add SSSS writing and backup/restore;
+      no Cygnus-specific homeserver endpoint is needed. The proposal still needs
+      to specify the stored key encoding (Hydrogen has a 32-byte seed) and make
+      clear that only one active signer/device may hold the current rotation
+      key, to avoid concurrent chain advances.
+- [ ] **Revoked-device list.** Hydrogen always sends `[]` on import. Track
+      device revocations locally and carry them across moves. `send_signed` on
+      the homeserver must reject revoked devices through standard device
+      management. Clarify in the proposal that the certificate's `device_id` is
+      the Matrix device ID and whether revocation remains permanent if that ID
+      is later reused with a new key.
+- [ ] **Stale-epoch heuristic.** Implement the client check against the newest
+      observed epochs. Fix the proposal's normative mismatch: `event_draft`
+      currently says MUST apply this check, while the heuristic section says
+      SHOULD. Keep the device floor mandatory and make the epoch check SHOULD
+      in both direct and assisted signing.
+- [ ] **Device floors per room and device.** Hydrogen currently keys floors by
+      room only; the proposal requires `(user, device_id, room)`. In Cygnus
+      rooms, key the user component by principal.
 
-## Spec gaps to settle with congruent
+## Spec decisions recorded; homeserver implementation pending
 
-- [ ] Who sends the `m.room.user_epoch` / `m.room.server_epoch` events after
-      create and join? Hydrogen assumes the custodian does.
-- [ ] How does a client join a room it isn't in yet? Hydrogen assumes
-      `event_draft` works for that room and triggers make_join/send_join.
-- [ ] Same-custodian rotation: Hydrogen uses `/principal/import`, which the spec
-      only defines for moving servers.
+- [x] **Epoch events after create and join — specified.** The proposal now says
+      the custodian emits/signs epoch events and the client signs the join, and
+      defines the create/join ordering. Still implement the contract in
+      Hydrogen and the homeserver.
+- [x] **Starting a join from the client — specified.** The proposal now defines
+      pre-join `event_draft` with `via`, `make_join`, epoch events, and
+      `send_join`. Still implement the client and homeserver flow.
+- [x] **Same-custodian rotation — specified.** `/principal/import` now covers
+      moves and same-custodian chain advancement, including idempotent retry and
+      room fan-out; the client sends device-signed rebinding joins. Still
+      implement the contract in Hydrogen and the homeserver.
+- [ ] **Cygnus homeserver implementation.** `../congruent` has no MSC00FC
+      endpoints yet. Supporting the proposal requires more than adding routes:
+      its event model assumes Matrix user IDs, while Cygnus needs principal
+      senders, a different event ID hash, device-signature authorization, an
+      extra state-resolution pass, and Cygnus join-handshake behavior. Implement
+      the six client-server endpoints and these room-version changes, then
+      validate them against Hydrogen.
 
 ## Upstream dependencies
 
