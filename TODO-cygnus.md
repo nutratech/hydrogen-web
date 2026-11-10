@@ -51,20 +51,87 @@ Nothing has run against a real homeserver yet; `../congruent` will be the first.
       incoming events aren't verified.
 - [ ] **Member panel.** Show each member's principal, custodian and chain
       height.
-- [ ] **Moving homeservers.** The API contract now covers `/principal/import`
-      for moves and same-custodian advancement. Client plumbing sends the full
-      chain, persists/retries the move, and rebinds each room through the old
-      display ID's server; the local device floor remains keyed to the same
-      principal/device/room. The service refuses a destination with a different
-      device ID because it cannot yet certify that device or switch the whole
-      Hydrogen session (sync and regular Matrix APIs still use the source
-      session). Add a two-session handoff, destination-device certification,
-      then the UI.
+- [ ] **Moving homeservers.** Plumbing exists (full-chain import, persisted
+      retries, rebinding joins via the old display ID's server); the two-session
+      handoff below and the move screen do not. See "Move handoff design".
 - [ ] **Recovery.** No UI to back up or restore the rotation key, and no warning
       before a cross-signing reset (which permanently breaks the principal — its
       master key is the cross-signing master key).
 - [ ] **Errors.** Draft rejections ("refusing to sign the homeserver's draft:
       …") show as raw strings; make them readable and offer retry.
+
+## Move handoff design
+
+A move runs across two Hydrogen sessions: the **source** (logged in on the old
+homeserver, holding the identity) and the **destination** (logged in on the new
+homeserver, with its own Matrix device ID). Proposal §9 "Device handoff on a
+move" (proposals `384b10893`) is the normative text; this is how Hydrogen
+implements it.
+
+**Why two sessions.** The destination device has a different Matrix device ID,
+and §5.2.1 binds a certificate to one device ID. Signing through the new
+custodian with the source's certificate would be refused, and sync and the
+regular Matrix APIs must follow the move anyway. Secret storage lives on the old
+homeserver, so the destination cannot read it: everything it needs is carried
+explicitly.
+
+**Source session (`exportMoveHandoff`)**
+
+1. Take the destination's custodian principal and new `display_user_id` (shown
+   by the destination session; typed or scanned by the user).
+2. Sign the move link with the current rotation key and generate the next one.
+   The current key never leaves this device.
+3. Build the handoff bundle:
+    - the chain from genesis plus the signed move link;
+    - the **next** rotation key (the one the move link commits to);
+    - the cross-signing master and self-signing private keys;
+    - revoked device IDs, plus this session's Cygnus device ID;
+    - the joined Cygnus room IDs, and the old display ID's server for `via`.
+4. Persist the identity as **retired** before returning the bundle: the spent
+   rotation key is destroyed, and the session refuses to sign events, rotate or
+   move from then on. Retiring first means a crash cannot leave two signers.
+5. Encrypt the bundle for transport (passphrase or a QR code scanned by the
+   destination). It holds the master key, so it must never be shown or stored
+   in plaintext.
+
+**Destination session (`importMoveHandoff`)**
+
+1. Decrypt the bundle and check it: the chain plus move link verifies to the
+   principal; the move link names this homeserver's custodian and this
+   account's user ID; the master private key matches the chain's `master_key`;
+   the next rotation key matches the move link's `next_commit`.
+2. Certify this session's device under the same master and self-signing keys
+   (new device seed and `device_certificate`) and persist the identity with the
+   move pending. This happens before anything is signed through the new
+   custodian, including the rebinding joins.
+3. Back up the next rotation key to this account's secret storage
+   (`m.principal.rotation_key`).
+4. `POST /principal/import` with the full chain and `revoked_device_ids`
+   (including the source device). Retry with the same links on failure; the
+   call is idempotent.
+5. Send a device-signed rebinding join in each room, with `via` set to the old
+   display ID's server. The device floor needs no seeding: floors are keyed by
+   (principal, device, room), so the new device has none until its first
+   confirmed event becomes its floor.
+
+`moveToCustodian` keeps refusing a session whose device ID differs from the
+identity's certificate. In this flow step 2 has already certified the
+destination device, so the check passes; it still stops a session from signing
+with another device's certificate.
+
+**Open questions**
+
+- **Cross-signing on the new account.** §5.2.1 binds the principal to the
+  account's cross-signing master key, and `POST /principal` checks it. The
+  destination account must publish the same master key as its cross-signing
+  master key; Hydrogen cannot upload cross-signing keys yet. The proposal
+  should say whether `/principal/import` checks this too.
+- **Source session after the move.** It stays logged in on the old homeserver,
+  retired. Offer to log it out.
+- **A lost bundle.** Once the source has retired, the bundle holds the only
+  copy of the next rotation key. If it is lost before import, the chain cannot
+  be extended again. The source should keep the encrypted bundle until the
+  destination confirms the import.
 
 ## Client and homeserver protocol work
 
