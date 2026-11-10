@@ -14,14 +14,14 @@ homeserver yet; `../congruent` will be the first.
       edited or redacted from the menu, and may mark the room unread. Fix: give
       rooms an "own sender IDs" set (Matrix ID + principal) and compare against
       it.
-- [ ] **Leave uses the plain `/leave`** (`Room.js` `leave`). It must be a
+- [x] **Leave uses the plain `/leave`** (`Room.js` `leave`). It must be a
       device-signed `m.room.member` `leave` through `cygnus.sendRoomEvent`-style
       state sending.
 - [ ] **Accepting or rejecting an invite uses `/join` and `/leave`**
       (`Invite.js`). The invite view needs to know the room is Cygnus (room
       version from invite state) and sign the membership.
-- [ ] **Rejoining an archived room uses `/join`** (`ArchivedRoom.js`).
-- [ ] **Group calls send state with `hsApi.sendState`** (`GroupCall.ts`). Hide
+- [x] **Rejoining an archived room uses `/join`** (`ArchivedRoom.js`).
+- [x] **Group calls send state with `hsApi.sendState`** (`GroupCall.ts`). Hide
       calls in Cygnus rooms or route them through signed sends.
 
 ## Missing UI
@@ -41,7 +41,7 @@ homeserver yet; `../congruent` will be the first.
 - [ ] **Display names.** Principals show as raw `@<43 chars>`. Read
       `display_user_id` from each member's `m.room.user_epoch` and show that,
       with the principal on hover or in the member panel.
-- [ ] **Room indicator.** Nothing in the room list, header or room details shows
+- [x] **Room indicator.** Nothing in the room list, header or room details shows
       that a room is Cygnus, or its room version.
 - [ ] **Verification status.** `CygnusVerifier` can check event IDs, device and
       custodian signatures, but timeline items show no trust indicator and
