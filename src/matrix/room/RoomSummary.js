@@ -74,6 +74,7 @@ export function processStateEvent(data, event, ownUserId) {
     if (event.type === "m.room.create") {
         data = data.cloneIfNeeded();
         data.lastMessageTimestamp = event.origin_server_ts;
+        data.roomVersion = event.content?.room_version ?? null;
     } else if (event.type === "m.room.encryption") {
         const algorithm = event.content?.algorithm;
         if (!data.encryption && algorithm === MEGOLM_ALGORITHM) {
@@ -175,6 +176,7 @@ export class SummaryData {
         this.tags = copy ? copy.tags : null;
         this.isDirectMessage = copy ? copy.isDirectMessage : false;
         this.dmUserId = copy ? copy.dmUserId : null;
+        this.roomVersion = copy ? (copy.roomVersion ?? null) : null;
         this.cloned = copy ? true : false;
     }
 

@@ -60,7 +60,14 @@ export class CreateRoomView extends TemplateView {
                             t.label({for: "isPublic"}, vm.i18n`Public room, anyone can join`)
                         ]),
                     ]),
-                    t.div({className: {"form-row check": true, hidden: vm => vm.isPublic}}, [
+                    t.div({className: {"form-row check": true, hidden: vm => !vm.canUseCygnus}}, [
+                        t.input({type: "checkbox", name: "isCygnus", id: "isCygnus", checked: vm.isCygnus}),
+                        t.label({for: "isCygnus"}, [
+                            vm.i18n`Cygnus room (portable identity)`,
+                            t.p({className: "form-row-description"}, vm.i18n`Every event is signed by your device and your principal stays yours if you change homeservers. Avatar, alias and encryption are not available for these rooms yet.`)
+                        ]),
+                    ]),
+                    t.div({className: {"form-row check": true, hidden: vm => vm.isPublic || vm.isCygnus}}, [
                         t.input({type: "checkbox", name: "isEncrypted", id: "isEncrypted", checked: vm.isEncrypted}),
                         t.label({for: "isEncrypted"}, vm.i18n`Enable end-to-end encryption`)
                     ]),
@@ -82,12 +89,13 @@ export class CreateRoomView extends TemplateView {
                             ]),
                         ]),
                     ]),
+                    t.if(vm => vm.error, t => t.p({className: "error"}, vm => vm.error)),
                     t.div({className: "button-row"}, [
                         t.button({
                             className: "button-action primary",
                             type: "submit",
                             disabled: vm => !vm.canCreate
-                        }, vm.i18n`Create room`),
+                        }, vm => vm.isCreating ? vm.i18n`Creating…` : vm.i18n`Create room`),
                     ]),
                 ])
             ])
@@ -101,6 +109,9 @@ export class CreateRoomView extends TemplateView {
                 break;
             case "isPublic":
                 this.value.setPublic(evt.currentTarget.isPublic.value === "true");
+                break;
+            case "isCygnus":
+                this.value.setCygnus(evt.target.checked);
                 break;
             case "isFederationDisabled":
                 this.value.setFederationDisabled(evt.target.checked);

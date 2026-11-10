@@ -41,6 +41,7 @@ import {
     SecretFetcher
 } from "./ssss/index";
 import {ObservableValue, RetainedObservableValue} from "../observable/value";
+import {CygnusService} from "./cygnus/CygnusService.js";
 import {CallHandler} from "./calls/CallHandler";
 import {RoomStateHandlerSet} from "./room/state/RoomStateHandlerSet";
 
@@ -104,6 +105,14 @@ export class Session {
         this._forgetArchivedRoom = this._forgetArchivedRoom.bind(this);
         this.needsKeyBackup = new ObservableValue(false);
         this._secretFetcher = new SecretFetcher();
+        this._cygnus = features.cygnus ? new CygnusService({
+            storage,
+            hsApi,
+            secretFetcher: this._secretFetcher,
+            userId: sessionInfo.userId,
+            deviceId: sessionInfo.deviceId,
+            getRandomValues: bytes => self.crypto.getRandomValues(bytes),
+        }) : undefined;
         this._secretSharing = null;
         this._secretStorage = null;
     }
@@ -397,6 +406,11 @@ export class Session {
         return this._secretFetcher;
     }
 
+    /** MSC00FC support, or `undefined` when the Cygnus feature is off. */
+    get cygnus() {
+        return this._cygnus;
+    }
+
     get hasIdentity() {
         return !!this._e2eeAccount;
     }
@@ -615,6 +629,10 @@ export class Session {
         }
         await this._keyBackup.get()?.start(log);
         await this._crossSigning.get()?.start(log);
+        if (this._cygnus) {
+            // after serverVersions is stored, so support detection sees it
+            await log.wrap("cygnus", log => this._cygnus.load(log).catch(err => log.catch(err)));
+        }
         
         // restore unfinished operations, like sending out room keys
         const opsTxn = await this._storage.readWriteTxn([
@@ -676,7 +694,8 @@ export class Session {
             user: this._user,
             createRoomEncryption: this._createRoomEncryption,
             platform: this._platform,
-            roomStateHandler: this._roomStateHandler
+            roomStateHandler: this._roomStateHandler,
+            getCygnus: () => this._cygnus,
         });
     }
 

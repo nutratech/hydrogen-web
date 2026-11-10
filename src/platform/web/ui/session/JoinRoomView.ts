@@ -31,6 +31,14 @@ export class JoinRoomView extends TemplateView<JoinRoomViewModel> {
                             t.label({for: "id"}, vm.i18n`Room id`),
                             input,
                         ]),
+                        t.div({className: {"form-row check": true, hidden: vm => !vm.canUseCygnus}}, [
+                            t.input({
+                                type: "checkbox", name: "withCygnus", id: "withCygnus",
+                                checked: vm => vm.withCygnus,
+                                onChange: evt => vm.setWithCygnus(evt.target.checked),
+                            }),
+                            t.label({for: "withCygnus"}, vm.i18n`Join with my portable identity (Cygnus room)`),
+                        ]),
                     ]),
                     t.div({className: "button-row"}, [
                         t.button({

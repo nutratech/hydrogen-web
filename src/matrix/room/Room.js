@@ -37,7 +37,18 @@ export class Room extends BaseRoom {
             relationWriter,
             memberWriter: new MemberWriter(this.id)
         });
-        this._sendQueue = new SendQueue({roomId: this.id, storage: this._storage, hsApi: this._hsApi, pendingEvents});
+        const {getCygnus} = options;
+        this._sendQueue = new SendQueue({
+            roomId: this.id, storage: this._storage, hsApi: this._hsApi, pendingEvents,
+            // MSC00FC rooms: the device signs each event and submits it through `send_signed`
+            getSignedSender: () => {
+                const cygnus = getCygnus?.();
+                if (!this.isCygnus || !cygnus) {
+                    return undefined;
+                }
+                return (type, content, log) => cygnus.sendRoomEvent(this.id, type, content, log);
+            },
+        });
     }
 
     _setEncryption(roomEncryption) {

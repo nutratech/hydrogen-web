@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
 Please see LICENSE files in the repository root for full details.
 */
 
+import {isCygnusRoomVersion} from "../cygnus/constants.js";
 import {EventEmitter} from "../../utils/EventEmitter";
 import {RoomSummary} from "./RoomSummary.js";
 import {GapWriter} from "./timeline/persistence/GapWriter.js";
@@ -426,6 +427,16 @@ export class BaseRoom extends EventEmitter {
 
     get isEncrypted() {
         return !!this._summary.data.encryption;
+    }
+
+    /** The `room_version` from `m.room.create`, once that event has been seen. */
+    get roomVersion() {
+        return this._summary.data.roomVersion ?? undefined;
+    }
+
+    /** True for an MSC00FC room, whose user events must be device-signed. */
+    get isCygnus() {
+        return isCygnusRoomVersion(this.roomVersion);
     }
 
     get isJoined() {
