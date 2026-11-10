@@ -38,6 +38,7 @@ export class Room extends BaseRoom {
             memberWriter: new MemberWriter(this.id)
         });
         const {getCygnus} = options;
+        this._getCygnus = getCygnus;
         this._sendQueue = new SendQueue({
             roomId: this.id, storage: this._storage, hsApi: this._hsApi, pendingEvents,
             // MSC00FC rooms: the device signs each event and submits it through `send_signed`
@@ -475,6 +476,12 @@ export class Room extends BaseRoom {
     leave(log = null) {
         return this._platform.logger.wrapOrRun(log, "leave room", async log => {
             log.set("id", this.id);
+            if (this.isCygnus) {
+                const cygnus = this._getCygnus?.();
+                if (!cygnus) throw new Error("Cygnus is unavailable for this room");
+                await cygnus.leaveRoom(this.id, log);
+                return;
+            }
             await this._hsApi.leave(this.id, {log}).response();
         });
     }

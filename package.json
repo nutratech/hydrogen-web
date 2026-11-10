@@ -10,6 +10,7 @@
   },
   "scripts": {
     "lint": "eslint --cache src/",
+    "format": "eslint src/ --fix",
     "lint-ts": "eslint src/ -c .ts-eslintrc.js --ext .ts",
     "lint-ci": "eslint src/",
     "test": "scripts/test-node18.sh",

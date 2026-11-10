@@ -107,6 +107,10 @@ export class CygnusService {
         return this._rooms().joinRoom(roomId, {log});
     }
 
+    leaveRoom(roomId, log) {
+        return this._rooms().leaveRoom(roomId, {log});
+    }
+
     /**
      * Send a non-state event (message, reaction, redaction…) in a Cygnus room; returns its event ID.
      * `txnId` should be the pending event's, so a retry resends the same signed event and the

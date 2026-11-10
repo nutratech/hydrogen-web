@@ -32,6 +32,7 @@ export class RoomView extends TemplateView {
                 t.view(new AvatarView(vm, 32)),
                 t.div({className: "room-description"}, [
                     t.h2(vm => vm.name),
+                    t.if(vm => vm.isCygnus, t => t.span({className: "RoomHeader_cygnus", title: vm => vm.roomVersion}, vm.i18n`Cygnus`)),
                 ]),
                 t.button({
                     className: "button-utility room-options",
@@ -66,7 +67,7 @@ export class RoomView extends TemplateView {
             const vm = this.value;
             const options = [];
             options.push(Menu.option(vm.i18n`Room details`, () => vm.openDetailsPanel()));
-            if (vm.features.calls) {
+            if (vm.features.calls && !vm.isCygnus) {
                 options.push(Menu.option(vm.i18n`Start call`, () => vm.startCall()));
             }
             if (vm.canLeave) {

@@ -712,7 +712,8 @@ export class Session {
             mediaRepository: this._mediaRepository,
             user: this._user,
             createRoomEncryption: this._createRoomEncryption,
-            platform: this._platform
+            platform: this._platform,
+            getCygnus: () => this._cygnus
         });
         this._activeArchivedRooms.set(roomId, room);
         return room;

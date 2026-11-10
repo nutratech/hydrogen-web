@@ -62,6 +62,15 @@ export class CygnusRooms {
         return roomId;
     }
 
+    leaveRoom(roomId, {log} = {}) {
+        return this._signer.send({
+            roomId,
+            type: "m.room.member",
+            stateKey: this._identity.principal,
+            content: {membership: "leave", custodian: this._identity.custodian},
+        }, {log});
+    }
+
     async _join(roomId, log) {
         return this._signer.send({
             roomId,

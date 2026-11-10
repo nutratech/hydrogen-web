@@ -16,6 +16,7 @@ export class ArchivedRoom extends BaseRoom {
         // archived rooms are reference counted,
         // as they are not kept in memory when not needed
         this._releaseCallback = options.releaseCallback;
+        this._getCygnus = options.getCygnus;
         this._forgetCallback = options.forgetCallback;
         this._retentionCount = 1;
         /**
@@ -159,6 +160,12 @@ export class ArchivedRoom extends BaseRoom {
 
     join(log = null) {
         return this._platform.logger.wrapOrRun(log, "rejoin archived room", async log => {
+            if (this.isCygnus) {
+                const cygnus = this._getCygnus?.();
+                if (!cygnus) throw new Error("Cygnus is unavailable for this room");
+                await cygnus.joinRoom(this.id, log);
+                return;
+            }
             await this._hsApi.join(this.id, {log}).response();
         });
     }

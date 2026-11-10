@@ -20,6 +20,7 @@ export class RoomDetailsView extends TemplateView {
                     t.mapView(vm => vm.isEncrypted, isEncrypted => new EncryptionIconView(isEncrypted))
                 ]),
             t.div({className: "RoomDetailsView_name"}, [t.h2(vm => vm.name)]),
+            t.if(vm => vm.isCygnus, t => t.div({className: "RoomDetailsView_cygnus"}, vm => vm.i18n`Cygnus room · ${vm.roomVersion}`)),
             this._createRoomAliasDisplay(vm),
             t.div({className: "RoomDetailsView_rows"},
                 [
