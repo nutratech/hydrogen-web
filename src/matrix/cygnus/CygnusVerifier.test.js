@@ -24,7 +24,7 @@ async function loadedVerifier() {
     return verifier;
 }
 
-export function tests(wasmBytes) {
+export function tests() {
     return {
         "unloaded verifier reports an error instead of throwing": assert => {
             const result = new CygnusVerifier().verifyChain([A0]);
@@ -43,7 +43,15 @@ export function tests(wasmBytes) {
         "computes the event ID of the create event": async assert => {
             const verifier = await loadedVerifier();
             assert.equal(verifier.eventId(CREATE_PDU).eventId, CREATE_EVENT_ID);
+            const reordered = {signatures: CREATE_PDU.signatures, hashes: CREATE_PDU.hashes, state_key: CREATE_PDU.state_key, auth_events: CREATE_PDU.auth_events, prev_events: CREATE_PDU.prev_events, depth: CREATE_PDU.depth, origin_server_ts: CREATE_PDU.origin_server_ts, content: CREATE_PDU.content, sender: CREATE_PDU.sender, type: CREATE_PDU.type, device_certificate: CREATE_PDU.device_certificate};
+            assert.equal(verifier.eventId(reordered).eventId, CREATE_EVENT_ID);
             assert.equal(verifier.verifyEventId(CREATE_PDU, CREATE_EVENT_ID).ok, true);
+        },
+        "verifies a device signature and rejects a wrong certified key": async assert => {
+            const verifier = await loadedVerifier();
+            const cert = CREATE_PDU.device_certificate;
+            assert.equal(verifier.verifyDeviceSignature(CREATE_PDU, CREATE_PDU.sender, cert.device_id, cert.device_key).ok, true);
+            assert.equal(verifier.verifyDeviceSignature(CREATE_PDU, CREATE_PDU.sender, cert.device_id, A0.slice(1, 44)).ok, false);
         },
         "flags an event whose content does not match its ID": async assert => {
             const verifier = await loadedVerifier();
@@ -61,6 +69,8 @@ export function tests(wasmBytes) {
             assert(isPrincipal("~soEUx9hiteZoLx9OwBJ94-GCuVrDksXROkIYuLn8Lb0"));
             assert(!isPrincipal("@alice:example.org"));
             assert(!isPrincipal("@Cl5rPGgj2s7JHMwFxSEOHfFYM_K0PDpnhXEMYwMgQuo="));
+            assert(!isPrincipal("@Cl5rPGgj2s7JHMwFxSEOHfFYM_K0PDpnhXEMYwMgQup"));
+            assert(!isPrincipal("@Cl5rPGgj2s7JHMwFxSEOHfFYM_K0PDpnhXEMYwMgQuo\n"));
         },
         "recognises the Cygnus room version": assert => {
             assert(isCygnusRoomVersion("tk.nutra.cygnus.1"));

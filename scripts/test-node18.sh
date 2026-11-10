@@ -22,6 +22,12 @@ else
         echo "set NODE18_DIR to an unpacked Node 18 release." >&2
         exit 1
     fi
+    NODE18_DIR="$(cd "$NODE18_DIR" && pwd)"
+    NODE18_MAJOR="$("$NODE18_DIR/bin/node" -p 'process.versions.node.split(".")[0]')"
+    if [ "$NODE18_MAJOR" -ne 18 ]; then
+        echo "Expected Node 18 at $NODE18_DIR/bin/node, found Node $NODE18_MAJOR." >&2
+        exit 1
+    fi
     NODE_BIN_DIR="$NODE18_DIR/bin:"
 fi
 
