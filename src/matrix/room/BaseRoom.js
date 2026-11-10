@@ -30,7 +30,7 @@ import {ObservedStateKeyValue} from "./state/ObservedStateKeyValue";
 const EVENT_ENCRYPTED_TYPE = "m.room.encrypted";
 
 export class BaseRoom extends EventEmitter {
-    constructor({roomId, storage, hsApi, mediaRepository, emitCollectionChange, user, createRoomEncryption, getSyncToken, platform}) {
+    constructor({roomId, storage, hsApi, mediaRepository, emitCollectionChange, user, createRoomEncryption, getSyncToken, platform, getCygnus}) {
         super();
         this._roomId = roomId;
         this._storage = storage;
@@ -41,6 +41,7 @@ export class BaseRoom extends EventEmitter {
         this._emitCollectionChange = emitCollectionChange;
         this._timeline = null;
         this._user = user;
+        this._getCygnus = getCygnus;
         this._changedMembersDuringSync = null;
         this._memberList = null;
         this._createRoomEncryption = createRoomEncryption;
@@ -336,7 +337,7 @@ export class BaseRoom extends EventEmitter {
                 const relationWriter = new RelationWriter({
                     roomId: this._roomId,
                     fragmentIdComparer: this._fragmentIdComparer,
-                    ownUserId: this._user.id,
+                    getOwnUserIds: () => this.ownUserIds,
                 });
                 const gapWriter = new GapWriter({
                     roomId: this._roomId,
@@ -434,6 +435,15 @@ export class BaseRoom extends EventEmitter {
         return this._summary.data.roomVersion ?? undefined;
     }
 
+    get ownUserIds() {
+        const principal = this.isCygnus ? this._getCygnus?.()?.identity.get()?.principal : undefined;
+        return principal ? [this._user.id, principal] : [this._user.id];
+    }
+
+    get ownRoomUserId() {
+        return this.ownUserIds[1] || this._user.id;
+    }
+
     /** True for an MSC00FC room, whose user events must be device-signed. */
     get isCygnus() {
         return isCygnusRoomVersion(this.roomVersion);
@@ -488,7 +498,7 @@ export class BaseRoom extends EventEmitter {
         if (powerLevelsState) {
             return new PowerLevels({
                 powerLevelEvent: powerLevelsState.event,
-                ownUserId: this._user.id,
+                ownUserId: this.ownRoomUserId,
                 membership: this.membership
             });
         }
@@ -496,12 +506,12 @@ export class BaseRoom extends EventEmitter {
         if (createState) {
             return new PowerLevels({
                 createEvent: createState.event,
-                ownUserId: this._user.id,
+                ownUserId: this.ownRoomUserId,
                 membership: this.membership
             });
         } else {
             const membership = this.membership;
-            return new PowerLevels({ownUserId: this._user.id, membership});
+            return new PowerLevels({ownUserId: this.ownRoomUserId, membership});
         }
     }
 
@@ -579,7 +589,11 @@ export class BaseRoom extends EventEmitter {
                 clock: this._platform.clock,
                 logger: this._platform.logger,
                 powerLevelsObservable: await this.observePowerLevels(),
-                hsApi: this._hsApi
+                hsApi: this._hsApi,
+                ownUserIds: this.ownUserIds,
+                ownRoomUserId: this.ownRoomUserId,
+                getOwnUserIds: () => this.ownUserIds,
+                getOwnRoomUserId: () => this.ownRoomUserId
             });
             try {
                 if (this._roomEncryption) {

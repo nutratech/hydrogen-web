@@ -12,9 +12,10 @@ import {ANNOTATION_RELATION_TYPE, getRelation} from "../relations.js";
 import {redactEvent} from "../common.js";
 
 export class RelationWriter {
-    constructor({roomId, ownUserId, fragmentIdComparer}) {
+    constructor({roomId, ownUserId, ownUserIds, getOwnUserIds, fragmentIdComparer}) {
         this._roomId = roomId;
-        this._ownUserId = ownUserId;
+        this._ownUserId = ownUserIds || ownUserId;
+        this._getOwnUserIds = getOwnUserIds;
         this._fragmentIdComparer = fragmentIdComparer;
     }
 
@@ -145,7 +146,10 @@ export class RelationWriter {
                 firstTimestamp: Number.MAX_SAFE_INTEGER
             };
         }
-        const sentByMe = annotationEvent.sender === this._ownUserId;
+        const ownUserIds = this._getOwnUserIds?.() || this._ownUserId;
+        const sentByMe = Array.isArray(ownUserIds)
+            ? ownUserIds.includes(annotationEvent.sender)
+            : annotationEvent.sender === ownUserIds;
 
         annotation.me = annotation.me || sentByMe;
         annotation.count += 1;

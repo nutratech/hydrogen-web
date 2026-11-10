@@ -17,6 +17,7 @@ import {AttachmentUpload} from "./AttachmentUpload.js";
 import {DecryptionSource} from "../e2ee/common";
 import {iterateResponseStateEvents} from "./common";
 import {PowerLevels, EVENT_TYPE as POWERLEVELS_EVENT_TYPE } from "./PowerLevels.js";
+import {isCygnusRoomVersion} from "../cygnus/constants.js";
 
 const EVENT_ENCRYPTED_TYPE = "m.room.encrypted";
 
@@ -29,7 +30,7 @@ export class Room extends BaseRoom {
         const relationWriter = new RelationWriter({
             roomId: this.id,
             fragmentIdComparer: this._fragmentIdComparer,
-            ownUserId: this._user.id
+            getOwnUserIds: () => this.ownUserIds
         });
         this._syncWriter = new SyncWriter({
             roomId: this.id,
@@ -39,6 +40,7 @@ export class Room extends BaseRoom {
         });
         const {getCygnus} = options;
         this._getCygnus = getCygnus;
+        this._syncOwnUserIds = null;
         this._sendQueue = new SendQueue({
             roomId: this.id, storage: this._storage, hsApi: this._hsApi, pendingEvents,
             // MSC00FC rooms: the device signs each event and submits it through `send_signed`
@@ -52,6 +54,21 @@ export class Room extends BaseRoom {
         });
     }
 
+    get ownUserIds() {
+        return this._syncOwnUserIds || super.ownUserIds;
+    }
+
+    _resolveOwnUserIds(roomResponse) {
+        let isCygnus = this.isCygnus;
+        iterateResponseStateEvents(roomResponse, event => {
+            if (event.type === "m.room.create" && isCygnusRoomVersion(event.content?.room_version)) {
+                isCygnus = true;
+            }
+        });
+        const principal = isCygnus ? this._getCygnus?.()?.identity.get()?.principal : undefined;
+        return principal ? [this._user.id, principal] : [this._user.id];
+    }
+
     _setEncryption(roomEncryption) {
         if (super._setEncryption(roomEncryption)) {
             this._sendQueue.enableEncryption(this._roomEncryption);
@@ -61,11 +78,12 @@ export class Room extends BaseRoom {
     }
 
     async prepareSync(roomResponse, membership, newKeys, txn, log) {
+        this._syncOwnUserIds = this._resolveOwnUserIds(roomResponse);
         log.set("id", this.id);
         if (newKeys) {
             log.set("newKeys", newKeys.length);
         }
-        let summaryChanges = this._summary.data.applySyncResponse(roomResponse, membership, this._user.id);
+        let summaryChanges = this._summary.data.applySyncResponse(roomResponse, membership, this.ownUserIds);
         let roomEncryption = this._roomEncryption;
         // encryption is enabled in this sync
         if (!roomEncryption && summaryChanges.encryption) {
@@ -155,7 +173,7 @@ export class Room extends BaseRoom {
         const allEntries = newEntries.concat(updatedEntries);
         // also apply (decrypted) timeline entries to the summary changes
         summaryChanges = summaryChanges.applyTimelineEntries(
-            allEntries, isInitialSync, !this._isTimelineOpen, this._user.id);
+            allEntries, isInitialSync, !this._isTimelineOpen, this.ownUserIds);
         
         // if we've have left the room, remove the summary
         if (summaryChanges.membership !== "join") {
@@ -234,7 +252,7 @@ export class Room extends BaseRoom {
             }
             if (this._timeline) {
                 for (const [userId, memberChange] of memberChanges.entries()) {
-                    if (userId === this._user.id) {
+                    if (this.ownUserIds.includes(userId)) {
                         this._timeline.updateOwnMember(memberChange.member);
                         break;
                     }
@@ -275,6 +293,7 @@ export class Room extends BaseRoom {
             this._sendQueue.emitRemovals(removedPendingEvents);
         }
         this._emitSyncRoomState(roomResponse);
+        this._syncOwnUserIds = null;
     }
 
     _updateObservedMembers(memberChanges) {
@@ -301,7 +320,7 @@ export class Room extends BaseRoom {
         if (this._powerLevels) {
             const newPowerLevels = new PowerLevels({
                 powerLevelEvent,
-                ownUserId: this._user.id,
+                ownUserId: this.ownRoomUserId,
                 membership: this.membership,
             });
             this._powerLevels.set(newPowerLevels);

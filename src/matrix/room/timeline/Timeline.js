@@ -20,7 +20,7 @@ import {EVENT_TYPE as MEMBER_EVENT_TYPE} from "../members/RoomMember.js";
 import {RetainedValue} from "../../../utils/RetainedValue";
 
 export class Timeline extends RetainedValue {
-    constructor({roomId, storage, closeCallback, fragmentIdComparer, pendingEvents, clock, powerLevelsObservable, hsApi}) {
+    constructor({roomId, storage, closeCallback, fragmentIdComparer, pendingEvents, clock, powerLevelsObservable, hsApi, ownUserIds, ownRoomUserId, getOwnUserIds, getOwnRoomUserId}) {
         super(() => { this.dispose(); });
         this._roomId = roomId;
         this._storage = storage;
@@ -32,6 +32,10 @@ export class Timeline extends RetainedValue {
         // constructing this early avoid some problem while sync and openTimeline race
         this._remoteEntries = new SortedArray((a, b) => a.compare(b));
         this._ownMember = null;
+        this._ownUserIds = ownUserIds || [];
+        this._ownRoomUserId = ownRoomUserId;
+        this._getOwnUserIds = getOwnUserIds;
+        this._getOwnRoomUserId = getOwnRoomUserId;
         this._timelineReader = new TimelineReader({
             roomId: this._roomId,
             storage: this._storage,
@@ -56,18 +60,22 @@ export class Timeline extends RetainedValue {
 
     /** @package */
     async load(user, membership, log) {
+        this._ownUserIds = this._getOwnUserIds?.() || this._ownUserIds;
+        this._ownRoomUserId = this._getOwnRoomUserId?.() || this._ownRoomUserId;
+        if (!this._ownUserIds.length) this._ownUserIds = [user.id];
         const txn = await this._storage.readTxn(this._timelineReader.readTxnStores.concat(
             this._storage.storeNames.roomMembers,
             this._storage.storeNames.roomState
         ));
-        const memberData = await txn.roomMembers.get(this._roomId, user.id);
+        const ownUserId = this._ownRoomUserId || user.id;
+        const memberData = await txn.roomMembers.get(this._roomId, ownUserId) || await txn.roomMembers.get(this._roomId, user.id);
         if (memberData) {
             this._ownMember = new RoomMember(memberData);
         } else {
             // this should never happen, as our own join into the room would have
             // made us receive our own member event, but just to be on the safe side and not crash,
             // fall back to bare user id
-            this._ownMember = RoomMember.fromUserId(this._roomId, user.id, membership);
+            this._ownMember = RoomMember.fromUserId(this._roomId, ownUserId, membership);
         }
         // it should be fine to not update the local entries,
         // as they should only populate once the view subscribes to it
@@ -164,7 +172,7 @@ export class Timeline extends RetainedValue {
         const relations = await txn.timelineRelations.getForTargetAndType(this._roomId, targetId, ANNOTATION_RELATION_TYPE);
         for (const relation of relations) {
             const annotation = await txn.timelineEvents.getByEventId(this._roomId, relation.sourceEventId);
-            if (annotation && annotation.event.sender === this._ownMember.userId && getRelation(annotation.event).key === key) {
+            if (annotation && this._ownUserIds.includes(annotation.event.sender) && getRelation(annotation.event).key === key) {
                 const eventEntry = new EventEntry(annotation, this._fragmentIdComparer);
                 this._addLocalRelationsToNewRemoteEntries([eventEntry]);
                 return eventEntry;
