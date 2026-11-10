@@ -176,7 +176,9 @@ export class CygnusEventSigner {
     async _draftAndSign(request, txnId, log) {
         const roomId = request.roomId;
         const key = roomId ? floorKey(this._identity, roomId) : undefined;
-        const floor = key ? (await this._get(FLOORS_SESSION_KEY))?.[key] : undefined;
+        const floors = key ? await this._get(FLOORS_SESSION_KEY) : undefined;
+        // floors stored before they were keyed by principal and device used the room ID alone
+        const floor = key ? (floors?.[key] ?? floors?.[roomId]) : undefined;
         const body = {
             type: request.type,
             content: request.content,
@@ -204,19 +206,26 @@ export class CygnusEventSigner {
         return this._identity.signEvent(draft);
     }
 
+    /**
+     * The §9 stale-epoch heuristic: refuse a draft whose `auth_events` cite an
+     * epoch event for this principal or its custodian that is older than the
+     * newest one this client has observed in the room. A cited event the client
+     * has not seen yet is accepted, since the homeserver is usually ahead of
+     * `/sync`; that is why this is a heuristic, not a guarantee.
+     */
     async _checkStaleEpoch(roomId, draft) {
         if (!roomId || !Array.isArray(draft.auth_events)) return undefined;
-        const txn = await this._storage.readTxn([this._storage.storeNames.roomState]);
-        const ownEpoch = await txn.roomState.get(roomId, "m.room.user_epoch", this._identity.principal);
-        const serverEpoch = await txn.roomState.get(roomId, "m.room.server_epoch", this._identity.custodian);
-        for (const [label, entry] of [["user", ownEpoch], ["custodian", serverEpoch]]) {
-            const event = entry?.event;
-            if (!event?.event_id) continue;
-            if (!draft.auth_events.includes(event.event_id)) {
-                return `draft auth_events omit the newest observed ${label} epoch ${event.event_id}`;
-            }
-            if (label === "user" && Number(event.content?.height) !== this._identity.height) {
-                return `room's user epoch height ${event.content?.height} differs from this identity's height ${this._identity.height}`;
+        const {roomState, timelineEvents} = this._storage.storeNames;
+        const txn = await this._storage.readTxn([roomState, timelineEvents]);
+        for (const [type, stateKey] of [["m.room.user_epoch", this._identity.principal], ["m.room.server_epoch", this._identity.custodian]]) {
+            const observed = (await txn.roomState.get(roomId, type, stateKey))?.event;
+            if (!observed?.event_id || draft.auth_events.includes(observed.event_id)) continue;
+            for (const eventId of draft.auth_events) {
+                const cited = (await txn.timelineEvents.getByEventId(roomId, eventId))?.event;
+                if (cited?.type === type && cited.state_key === stateKey &&
+                    Number(cited.content?.height) < Number(observed.content?.height)) {
+                    return `draft cites ${type} ${eventId} at height ${cited.content?.height}, older than the observed ${observed.event_id} at height ${observed.content?.height}`;
+                }
             }
         }
         return undefined;

@@ -13,8 +13,9 @@ import {SESSION_E2EE_KEY_PREFIX} from "../e2ee/common";
 export const IDENTITY_SESSION_KEY = `${SESSION_E2EE_KEY_PREFIX}cygnus.identity`;
 export const ROTATION_KEY_SECRET = "m.principal.rotation_key";
 
+/** Secrets are unpadded standard base64, like the `m.cross_signing.*` ones (§9). */
 function toBase64Standard(value) {
-    return value.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "") + "=".repeat((4 - value.length % 4) % 4);
+    return value.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "");
 }
 
 function toBase64Url(value) {
@@ -67,7 +68,6 @@ export class CygnusIdentity {
     static async create({storage, hsApi, crypto, secretFetcher, masterSeed, selfSigningSeed, deviceId, displayUserId, log}) {
         const masterKey = crypto.publicKey(masterSeed);
         const rotationSeed = crypto.generateSeed();
-        await secretFetcher?.writeSecret?.(ROTATION_KEY_SECRET, toBase64Standard(rotationSeed), log);
         const nextCommit = crypto.rotationCommitment(rotationSeed);
         const response = await hsApi.cygnusCreatePrincipal(masterKey, nextCommit, {log}).response();
         const genesis = crypto.verifyUserPrincipalResponse(rotationSeed, masterKey, response.principal, response.links);
@@ -91,6 +91,9 @@ export class CygnusIdentity {
         };
         const identity = new CygnusIdentity(record, {storage, hsApi, crypto, secretFetcher});
         await identity._persist();
+        // Only after the custodian accepted: writing first would overwrite the
+        // key of an identity another device already created for this account.
+        await secretFetcher?.writeSecret?.(ROTATION_KEY_SECRET, toBase64Standard(rotationSeed), log);
         return identity;
     }
 
@@ -237,7 +240,12 @@ export class CygnusIdentity {
     async _assertRotationKey(expectedSeed) {
         if (!this._secretFetcher) return;
         const stored = await this._secretFetcher.readSecretStorage(ROTATION_KEY_SECRET);
-        if (!stored || toBase64Url(stored) !== expectedSeed) {
+        if (!stored) {
+            // never backed up (e.g. created before Hydrogen wrote secret storage)
+            await this._secretFetcher.writeSecret(ROTATION_KEY_SECRET, toBase64Standard(expectedSeed));
+            return;
+        }
+        if (toBase64Url(stored) !== expectedSeed) {
             throw new Error("secret-storage rotation key differs from this device's current key; refusing to sign a chain link");
         }
     }

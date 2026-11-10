@@ -4,7 +4,7 @@ Please see LICENSE files in the repository root for full details.
 */
 
 import {CygnusCrypto} from "./CygnusCrypto.js";
-import {CygnusIdentity, IDENTITY_SESSION_KEY} from "./CygnusIdentity.js";
+import {CygnusIdentity, IDENTITY_SESSION_KEY, ROTATION_KEY_SECRET} from "./CygnusIdentity.js";
 import {CygnusEventSigner, checkDraft, FLOORS_SESSION_KEY, signedEventKey} from "./CygnusEventSigner.js";
 import {ConnectionError, HomeServerError} from "../error.js";
 import {CygnusRooms} from "./CygnusRooms.js";
@@ -44,19 +44,38 @@ function seededRandom(seeds) {
     };
 }
 
-/** Just enough of Hydrogen's storage for the `session` store. */
+/**
+ * Just enough of Hydrogen's storage: the `session` store, plus room state and
+ * timeline events keyed by event ID for the stale-epoch check.
+ */
 function memoryStorage() {
     const values = new Map();
+    const roomState = new Map();
+    const events = new Map();
     const txn = () => ({
         session: {
             get: async key => values.get(key),
             set: (key, value) => values.set(key, JSON.parse(JSON.stringify(value))),
             remove: key => values.delete(key),
         },
+        roomState: {get: async (roomId, type, stateKey) => roomState.get(`${roomId}|${type}|${stateKey}`)},
+        timelineEvents: {getByEventId: async (roomId, eventId) => events.get(`${roomId}|${eventId}`)},
         complete: async () => {},
         abort: () => {},
     });
-    return {values, storeNames: {session: "session"}, readTxn: async () => txn(), readWriteTxn: async () => txn()};
+    /** Record an event as observed: in the timeline, and as current state when `current`. */
+    const observe = (roomId, event, {current = true} = {}) => {
+        events.set(`${roomId}|${event.event_id}`, {event});
+        if (current) {
+            roomState.set(`${roomId}|${event.type}|${event.state_key}`, {event});
+        }
+    };
+    return {
+        values, observe,
+        storeNames: {session: "session", roomState: "roomState", timelineEvents: "timelineEvents"},
+        readTxn: async () => txn(),
+        readWriteTxn: async () => txn(),
+    };
 }
 
 function request(result) {
@@ -90,12 +109,25 @@ function custodianApi(crypto, overrides = {}) {
     return {api, calls};
 }
 
-async function aliceIdentity(extraSeeds = []) {
+/** Secret storage as `SecretFetcher` exposes it: unpadded standard base64 values. */
+function memorySecrets(initial = {}) {
+    const secrets = new Map(Object.entries(initial));
+    const writes = [];
+    return {
+        secrets, writes,
+        readSecretStorage: async name => secrets.get(name),
+        writeSecret: async (name, value) => { writes.push(name); secrets.set(name, value); },
+    };
+}
+
+const toStandard = seed => seed.replace(/-/g, "+").replace(/_/g, "/");
+
+async function aliceIdentity(extraSeeds = [], {secretFetcher} = {}) {
     const crypto = await loadedCrypto([USR_ROT_1, ...extraSeeds]);
     const storage = memoryStorage();
     const {api, calls} = custodianApi(crypto);
     const identity = await CygnusIdentity.create({
-        storage, hsApi: api, crypto,
+        storage, hsApi: api, crypto, secretFetcher,
         masterSeed: USR_MSK,
         selfSigningSeed: SELF_SIGNING,
         deviceId: "HYDROGEN",
@@ -105,7 +137,7 @@ async function aliceIdentity(extraSeeds = []) {
 }
 
 /** What a homeserver would propose for `request` in assisted mode. */
-function draftFor(crypto, identity, req, {prevEvents = ["$prev"]} = {}) {
+function draftFor(crypto, identity, req, {prevEvents = ["$prev"], authEvents = ["$auth"]} = {}) {
     const draft = {
         type: req.type,
         sender: identity.principal,
@@ -117,7 +149,7 @@ function draftFor(crypto, identity, req, {prevEvents = ["$prev"]} = {}) {
     if (req.type !== "m.room.create") {
         draft.room_id = req.roomId;
         draft.prev_events = prevEvents;
-        draft.auth_events = ["$auth"];
+        draft.auth_events = authEvents;
     }
     if (req.stateKey !== undefined) {
         draft.state_key = req.stateKey;
@@ -267,6 +299,87 @@ export function tests() {
             assert.deepEqual(bodies[0].via, ["second.example.net"]);
             assert.equal("via" in bodies[1], false);
         },
+        "creating an identity backs up the rotation key only after the custodian accepts": async assert => {
+            const secrets = memorySecrets();
+            const {calls} = await aliceIdentity([], {secretFetcher: secrets});
+            assert(calls.created);
+            assert.equal(secrets.secrets.get(ROTATION_KEY_SECRET), toStandard(USR_ROT_1));
+            const failing = memorySecrets({[ROTATION_KEY_SECRET]: "other device's key"});
+            const crypto = await loadedCrypto([USR_ROT_1]);
+            const {api} = custodianApi(crypto, {cygnusCreatePrincipal: () => request(new Error("M_FORBIDDEN"))});
+            await assert.rejects(CygnusIdentity.create({
+                storage: memoryStorage(), hsApi: api, crypto, secretFetcher: failing,
+                masterSeed: USR_MSK, selfSigningSeed: SELF_SIGNING,
+                deviceId: "HYDROGEN", displayUserId: "@alice:chat.example.org",
+            }));
+            assert.equal(failing.secrets.get(ROTATION_KEY_SECRET), "other device's key");
+        },
+        "rotation stores the next key in secret storage before submitting the link": async assert => {
+            const secrets = memorySecrets();
+            const {identity} = await aliceIdentity([SELF_SIGNING, USR_ROT_2], {secretFetcher: secrets});
+            let storedAtImport;
+            identity._hsApi = {cygnusImportPrincipal: () => {
+                storedAtImport = secrets.secrets.get(ROTATION_KEY_SECRET);
+                return request({});
+            }};
+            await identity.rotate();
+            assert.equal(storedAtImport, toStandard(USR_ROT_2));
+            assert.equal(identity.height, 1);
+        },
+        "rotation refuses when secret storage holds another device's key": async assert => {
+            const secrets = memorySecrets();
+            const {identity, calls} = await aliceIdentity([SELF_SIGNING, USR_ROT_2], {secretFetcher: secrets});
+            secrets.secrets.set(ROTATION_KEY_SECRET, toStandard(USR_ROT_2));
+            await assert.rejects(identity.rotate());
+            assert.equal(calls.imports.length, 0);
+            assert.equal(identity.hasPendingRotation, false);
+        },
+        "rotation backs up a key that was never in secret storage": async assert => {
+            const {identity} = await aliceIdentity([SELF_SIGNING, USR_ROT_2]);
+            const secrets = memorySecrets();
+            identity._secretFetcher = secrets;
+            await identity.rotate();
+            assert.deepEqual(secrets.writes, [ROTATION_KEY_SECRET, ROTATION_KEY_SECRET]);
+            assert.equal(secrets.secrets.get(ROTATION_KEY_SECRET), toStandard(USR_ROT_2));
+        },
+        "revoking a device publishes it with a chain advancement": async assert => {
+            const {identity, calls} = await aliceIdentity([SELF_SIGNING, USR_ROT_2]);
+            identity._hsApi = {cygnusImportPrincipal: (links, revoked) => {
+                calls.imports.push({links, revoked});
+                return request({});
+            }};
+            const service = new CygnusService({storage: identity._storage, hsApi: {}, userId: "@alice:chat.example.org", deviceId: "HYDROGEN"});
+            service._isSupported = true;
+            service.identity.set(identity);
+            await assert.rejects(service.revokeDevice("HYDROGEN"));
+            await service.revokeDevice("LAPTOP");
+            assert.deepEqual(calls.imports[0].revoked, ["LAPTOP"]);
+            assert.equal(identity.height, 1);
+        },
+        "refuses a draft citing an older epoch than the one observed": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity();
+            const epoch = (eventId, height) => ({event_id: eventId, type: "m.room.user_epoch", state_key: USER_U, content: {height}});
+            storage.observe(ROOM_ID, epoch("$old", 0), {current: false});
+            storage.observe(ROOM_ID, epoch("$new", 1));
+            let authEvents;
+            const {api} = assistedApi(crypto, identity, {draft: (req, prevEvents) => draftFor(crypto, identity, req, {prevEvents, authEvents})});
+            const signer = new CygnusEventSigner({identity, crypto, hsApi: api, storage, createTxnId: () => `t-${authEvents[0]}`});
+            const send = cited => {
+                authEvents = cited;
+                return signer.send({roomId: ROOM_ID, type: "m.room.message", content: {body: "hi"}});
+            };
+            await assert.rejects(send(["$old"]));
+            // the homeserver is usually ahead of /sync: an epoch not seen yet is accepted
+            await send(["$unseen"]);
+            await send(["$new"]);
+        },
+        "honours a device floor stored under the room ID alone": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity();
+            storage.values.set(FLOORS_SESSION_KEY, {[ROOM_ID]: "$floor"});
+            const {api} = assistedApi(crypto, identity, {extendTip: false});
+            const signer = new CygnusEventSigner({identity, crypto, hsApi: api, storage, createTxnId: () => "t1"});
+            await assert.rejects(signer.send({roomId: ROOM_ID, type: "m.room.message", content: {body: "hi"}}));
+        },
         "signs and submits an assisted-mode draft, then holds the device floor": async assert => {
             const {identity, crypto, storage} = await aliceIdentity();
             const {api, sent} = assistedApi(crypto, identity, {extendTip: false});
@@ -275,7 +388,7 @@ export function tests() {
             const {eventId} = await signer.send({roomId: ROOM_ID, type: "m.room.message", content});
             assert.equal(sent.length, 1);
             assert.equal(eventId, crypto.eventId(sent[0]).eventId);
-            assert.equal(storage.values.get(FLOORS_SESSION_KEY)[ROOM_ID], eventId);
+            assert.equal(storage.values.get(FLOORS_SESSION_KEY)[JSON.stringify([USER_U, "HYDROGEN", ROOM_ID])], eventId);
             // the next draft omits the floor from prev_events, so it must be refused
             await assert.rejects(signer.send({roomId: ROOM_ID, type: "m.room.message", content}));
             assert.equal(sent.length, 1);

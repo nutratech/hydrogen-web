@@ -82,8 +82,9 @@ export class SecretStorage {
         }
         const txn = await this._storage.readTxn([this._storage.storeNames.accountData]);
         const existing = await txn.accountData.get(name);
-        const encrypted = {...(existing?.content?.encrypted || {})};
-        encrypted[this._key.id] = await this._encryptAESSecret(name, secret);
+        // Encrypt under this key only: a ciphertext left under another key would
+        // keep serving the old value to devices that unlock with that key.
+        const encrypted = {[this._key.id]: await this._encryptAESSecret(name, secret)};
         const content = {...(existing?.content || {}), encrypted};
         await this._hsApi.setAccountData(this._userId, name, content, {log}).response();
         const writeTxn = await this._storage.readWriteTxn([this._storage.storeNames.accountData]);
