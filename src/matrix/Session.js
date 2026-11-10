@@ -112,6 +112,7 @@ export class Session {
             userId: sessionInfo.userId,
             deviceId: sessionInfo.deviceId,
             getRandomValues: bytes => self.crypto.getRandomValues(bytes),
+            subtleCrypto: self.crypto.subtle || self.crypto.webkitSubtle,
         }) : undefined;
         this._secretSharing = null;
         this._secretStorage = null;

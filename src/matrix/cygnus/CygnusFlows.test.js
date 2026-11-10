@@ -11,6 +11,7 @@ import {CygnusRooms} from "./CygnusRooms.js";
 import {CygnusService} from "./CygnusService.js";
 import {CYGNUS_ROOM_VERSION} from "./constants.js";
 import anotherjson from "another-json";
+import {webcrypto} from "node:crypto";
 
 const anotherJson = value => anotherjson.stringify(value);
 
@@ -266,7 +267,7 @@ export function tests() {
             const {identity, crypto, storage} = await aliceIdentity([SELF_SIGNING, USR_ROT_2], {secretFetcher: sourceSecrets});
             const sourceService = new CygnusService({
                 storage, hsApi: {}, secretFetcher: sourceSecrets,
-                userId: "@alice:chat.example.org", deviceId: "HYDROGEN",
+                userId: "@alice:chat.example.org", deviceId: "HYDROGEN", subtleCrypto: webcrypto.subtle,
             });
             sourceService._crypto = crypto;
             sourceService._isSupported = true;
@@ -282,6 +283,7 @@ export function tests() {
                 secretFetcher: destinationSecrets,
                 userId: "@alice:second.example.net",
                 deviceId: "DESTINATION",
+                subtleCrypto: webcrypto.subtle,
             });
             destinationService._crypto = crypto;
             destinationService._isSupported = true;
@@ -309,12 +311,30 @@ export function tests() {
                 }
                 return sendSigned(txnId, event, options);
             };
-            const move = {custodian: serverB, roomIds: [ROOM_ID, ROOM_ID]};
-            await assert.rejects(destinationService.moveFrom(sourceService, move));
-            assert.equal(identity.isHandoffPending, true);
+            const passphrase = "correct horse battery staple";
+            const encryptedBundle = await sourceService.prepareMoveHandoff({
+                custodian: serverB,
+                displayUserId: "@alice:second.example.net",
+                roomIds: [ROOM_ID, ROOM_ID],
+                passphrase,
+            });
+            assert.equal(identity.isRetired, true);
+            assert.equal(identity.rotationSeed, undefined);
+            assert.equal(identity.deviceCertificate, undefined);
+            assert.equal(identity.pendingMoveBundle, encryptedBundle);
+            assert.equal(sourceSecrets.secrets.has(ROTATION_KEY_SECRET), false);
             await assert.rejects(identity.rotate());
             assert.throws(() => identity.signEvent({}), /not certified to sign/);
-            await assert.rejects(destinationService.moveFrom(sourceService, move), /offline/);
+            await assert.rejects(destinationService.importMoveHandoff(encryptedBundle, "a different passphrase", {
+                sourceService, custodian: serverB,
+            }), /could not decrypt/);
+            await assert.rejects(destinationService.importMoveHandoff(encryptedBundle, passphrase, {
+                sourceService, custodian: serverB,
+            }));
+            assert.equal(identity.pendingMoveBundle, encryptedBundle);
+            await assert.rejects(destinationService.importMoveHandoff(encryptedBundle, passphrase, {
+                sourceService, custodian: serverB,
+            }), /offline/);
             assert.equal(imports.length, 2);
             assert.equal(imports[0].links.length, 2);
             assert.equal(imports[0].links[0], U0);
@@ -327,8 +347,8 @@ export function tests() {
             assert.equal(crypto.parseLink(movedIdentity.links[1]).custodian, serverB);
             assert.equal(movedIdentity.deviceCertificate.device_id, "DESTINATION");
             assert.equal(destinationSecrets.secrets.get(ROTATION_KEY_SECRET), toStandard(USR_ROT_2));
-            assert.equal(sourceSecrets.secrets.has(ROTATION_KEY_SECRET), false);
             assert.equal(identity.isRetired, true);
+            assert.equal(identity.pendingMoveBundle, undefined);
             assert.equal(storage.values.get(IDENTITY_SESSION_KEY).rotationSeed, undefined);
             // A confirmed destination join seeds the new device's room floor.
             await destinationService.resumeMoveRebinds();
@@ -349,7 +369,7 @@ export function tests() {
             const {identity, crypto, storage} = await aliceIdentity([SELF_SIGNING, USR_ROT_2], {secretFetcher: sourceSecrets});
             const sourceService = new CygnusService({
                 storage, hsApi: {}, secretFetcher: sourceSecrets,
-                userId: "@alice:chat.example.org", deviceId: "HYDROGEN",
+                userId: "@alice:chat.example.org", deviceId: "HYDROGEN", subtleCrypto: webcrypto.subtle,
             });
             sourceService._crypto = crypto;
             sourceService._isSupported = true;
@@ -365,6 +385,7 @@ export function tests() {
                 secretFetcher: destinationSecrets,
                 userId: "@alice:second.example.net",
                 deviceId: "DESTINATION",
+                subtleCrypto: webcrypto.subtle,
             });
             destinationService._crypto = crypto;
             destinationService._isSupported = true;
@@ -383,17 +404,28 @@ export function tests() {
                 return createCertificate(...args);
             };
 
-            const move = {custodian: serverB, roomIds: []};
-            await assert.rejects(destinationService.moveFrom(sourceService, move), /temporary certification failure/);
+            const passphrase = "correct horse battery staple";
+            const encryptedBundle = await sourceService.prepareMoveHandoff({
+                custodian: serverB,
+                displayUserId: "@alice:second.example.net",
+                passphrase,
+            });
+            await assert.rejects(destinationService.importMoveHandoff(encryptedBundle, passphrase, {
+                sourceService, custodian: serverB,
+            }), /temporary certification failure/);
             const importedIdentity = destinationService.identity.get();
             assert.equal(importedIdentity.custodian, serverB);
             assert.equal(importedIdentity.deviceCertificate, undefined);
             assert.equal(importedIdentity.isHandoffPending, true);
-            assert.equal(identity.isRetired, false);
+            assert.equal(identity.isRetired, true);
+            assert.equal(identity.pendingMoveBundle, encryptedBundle);
 
-            await destinationService.moveFrom(sourceService, move);
+            await destinationService.importMoveHandoff(encryptedBundle, passphrase, {
+                sourceService, custodian: serverB,
+            });
             assert.equal(destinationService.identity.get().deviceCertificate.device_id, "DESTINATION");
             assert.equal(identity.isRetired, true);
+            assert.equal(identity.pendingMoveBundle, undefined);
             assert.equal(destinationSecrets.secrets.has(ROTATION_KEY_SECRET), true);
             assert.equal(sourceSecrets.secrets.has(ROTATION_KEY_SECRET), false);
         },

@@ -22,6 +22,65 @@ function base64UrlToBase64(value) {
     return value.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "");
 }
 
+const MOVE_BUNDLE_AAD = new TextEncoder().encode("tk.nutra.cygnus.move.v1");
+const MOVE_BUNDLE_ITERATIONS = 250000;
+
+function encodeBytes(bytes) {
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+    }
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeBytes(value) {
+    const binary = atob(value.replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(binary, character => character.charCodeAt(0));
+}
+
+async function deriveMoveBundleKey(passphrase, salt, subtle) {
+    if (typeof passphrase !== "string" || passphrase.length < 12) {
+        throw new Error("move handoff passphrase must be at least 12 characters");
+    }
+    if (!subtle) throw new Error("WebCrypto is required to encrypt the Cygnus move handoff");
+    const material = await subtle.importKey("raw", new TextEncoder().encode(passphrase), "PBKDF2", false, ["deriveKey"]);
+    return subtle.deriveKey({name: "PBKDF2", hash: "SHA-256", salt, iterations: MOVE_BUNDLE_ITERATIONS}, material,
+        {name: "AES-GCM", length: 256}, false, ["encrypt", "decrypt"]);
+}
+
+async function encryptMoveBundle(bundle, passphrase, subtle, getRandomValues) {
+    const salt = getRandomValues(new Uint8Array(16));
+    const iv = getRandomValues(new Uint8Array(12));
+    const key = await deriveMoveBundleKey(passphrase, salt, subtle);
+    const ciphertext = await subtle.encrypt(
+        {name: "AES-GCM", iv, additionalData: MOVE_BUNDLE_AAD}, key, new TextEncoder().encode(JSON.stringify(bundle)),
+    );
+    return JSON.stringify({version: 1, kdf: "PBKDF2-SHA256", iterations: MOVE_BUNDLE_ITERATIONS,
+        cipher: "AES-256-GCM", salt: encodeBytes(salt), iv: encodeBytes(iv), ciphertext: encodeBytes(new Uint8Array(ciphertext))});
+}
+
+async function decryptMoveBundle(encrypted, passphrase, subtle) {
+    let envelope;
+    try { envelope = JSON.parse(encrypted); } catch (_) { throw new Error("invalid encrypted Cygnus move bundle"); }
+    if (envelope?.version !== 1 || envelope.kdf !== "PBKDF2-SHA256" ||
+        envelope.iterations !== MOVE_BUNDLE_ITERATIONS || envelope.cipher !== "AES-256-GCM" ||
+        typeof envelope.salt !== "string" || typeof envelope.iv !== "string" || typeof envelope.ciphertext !== "string") {
+        throw new Error("unsupported encrypted Cygnus move bundle");
+    }
+    try {
+        const salt = decodeBytes(envelope.salt);
+        const key = await deriveMoveBundleKey(passphrase, salt, subtle);
+        const plaintext = await subtle.decrypt(
+            {name: "AES-GCM", iv: decodeBytes(envelope.iv), additionalData: MOVE_BUNDLE_AAD},
+            key,
+            decodeBytes(envelope.ciphertext),
+        );
+        return JSON.parse(new TextDecoder().decode(plaintext));
+    } catch (_) {
+        throw new Error("could not decrypt the Cygnus move bundle; check the passphrase and bundle");
+    }
+}
+
 /**
  * Session-level entry point for MSC00FC: whether the homeserver supports it,
  * this account's principal (if any), and the identity and room flows.
@@ -30,13 +89,15 @@ function base64UrlToBase64(value) {
  * never fetch the wasm module.
  */
 export class CygnusService {
-    constructor({storage, hsApi, secretFetcher, userId, deviceId, getRandomValues, wasmSource}) {
+    constructor({storage, hsApi, secretFetcher, userId, deviceId, getRandomValues, subtleCrypto, wasmSource}) {
         this._storage = storage;
         this._hsApi = hsApi;
         this._secretFetcher = secretFetcher;
         this._userId = userId;
         this._deviceId = deviceId;
         this._wasmSource = wasmSource;
+        this._getRandomValues = getRandomValues;
+        this._subtleCrypto = subtleCrypto || (typeof window !== "undefined" ? window.crypto?.subtle : undefined);
         this._crypto = new CygnusCrypto(getRandomValues);
         this._isSupported = false;
         /** @type {ObservableValue<CygnusIdentity | undefined>} */
@@ -127,63 +188,82 @@ export class CygnusService {
         return this._rooms().leaveRoom(roomId, {log});
     }
 
-    /**
-     * Move a principal while running from the authenticated destination
-     * session. The source session exports its secret material explicitly;
-     * secret storage is account data on that source homeserver and is not
-     * visible to this session.
-     */
-    async moveFrom(sourceService, {custodian, roomIds = [], log} = {}) {
+    /** Sign and retire this source device, retaining only an encrypted bundle for retry. */
+    async prepareMoveHandoff({custodian, displayUserId, roomIds = [], passphrase, log} = {}) {
+        const identity = this.identity.get();
+        if (!identity) throw new Error("no source Cygnus identity is available to move");
+        if (identity.isRetired) {
+            const encrypted = identity.pendingMoveBundle;
+            if (!encrypted) throw new Error("the retired source has no recoverable move bundle");
+            await this._secretFetcher.deleteSecret("m.principal.rotation_key", log);
+            return encrypted;
+        }
+        if (identity.hasPendingRotation) await identity.rotate({log});
+        const allRooms = [...new Set([...(await this._joinedCygnusRoomIds()), ...roomIds])];
+        const [masterSeed, selfSigningSeed] = await Promise.all([
+            this._secretFetcher.readSecretStorage("m.cross_signing.master"),
+            this._secretFetcher.readSecretStorage("m.cross_signing.self_signing"),
+        ]);
+        if (!masterSeed || !selfSigningSeed || this._crypto.publicKey(base64ToBase64Url(masterSeed)) !== identity.masterKey) {
+            throw new Error("source secret storage does not contain the cross-signing keys for this identity");
+        }
+        if (!identity.pendingMove && !identity.revokedDeviceIds.includes(identity.deviceId)) {
+            await identity.revokeDevice(identity.deviceId);
+        }
+        // Stop ordinary event signing before preparing or encrypting the
+        // handoff. A failure here can resume the exact same signed move link.
+        await identity.beginMoveHandoff();
+        const pendingMove = await identity.prepareMove({custodian, displayUserId, roomIds: allRooms});
+        if (pendingMove.custodian !== custodian || pendingMove.displayUserId !== displayUserId) {
+            throw new Error("pending Cygnus move targets a different destination");
+        }
+        const record = identity.exportMoveRecord();
+        delete record.rotationSeed; // the spent key never leaves the source device
+        record.revokedDeviceIds = [...new Set([...record.revokedDeviceIds, identity.deviceId])];
+        const bundle = {
+            version: 1,
+            record,
+            links: [...identity.links, pendingMove.link],
+            rotationKey: pendingMove.nextRotationSeed,
+            masterSeed,
+            selfSigningSeed,
+            sourceDeviceId: identity.deviceId,
+            revokedDeviceIds: [...new Set([...identity.revokedDeviceIds, identity.deviceId])],
+            roomIds: [...new Set([...allRooms, ...identity.pendingRebindRoomIds])],
+            via: pendingMove.rebindVia,
+        };
+        const encrypted = await encryptMoveBundle(bundle, passphrase, this._subtleCrypto, bytes => {
+            if (this._getRandomValues) return this._getRandomValues(bytes);
+            const seed = decodeBytes(this._crypto.generateSeed());
+            bytes.set(seed.subarray(0, bytes.length));
+            return bytes;
+        });
+        await identity.retireWithMoveBundle(encrypted);
+        await this._secretFetcher.deleteSecret("m.principal.rotation_key", log);
+        this.identity.set(identity);
+        return encrypted;
+    }
+
+    /** Import a source-signed, passphrase-encrypted handoff on this destination session. */
+    async importMoveHandoff(encryptedBundle, passphrase, {sourceService, custodian, log} = {}) {
         this._requireSupport();
-        if (!sourceService || sourceService === this) {
-            throw new Error("an authenticated source session is required for a Cygnus move");
+        const bundle = await decryptMoveBundle(encryptedBundle, passphrase, this._subtleCrypto);
+        this._validateMoveBundle(bundle, custodian);
+        await this._validateDestinationCrossSigningKeys(bundle, log);
+        if (!this._secretFetcher?.hasSecretStorage) {
+            throw new Error("unlock destination secret storage before moving the Cygnus identity");
         }
         let identity = this.identity.get();
-        const importAlreadyCompleted = identity?.isHandoffPending && !identity.pendingMove &&
-            identity.custodian === custodian && identity.displayUserId === this._userId;
-        if ((identity?.pendingRebindRoomIds.length || importAlreadyCompleted) && !identity.pendingRevocationImport) {
-            let bundle;
-            if (identity.isHandoffPending) {
-                const sourceIdentity = sourceService.identity.get();
-                bundle = sourceIdentity?.isRetired ? undefined : await sourceService.exportMoveBundle(log);
-                // The import may have succeeded just before the app stopped.
-                // Certification must still precede handoff completion and every
-                // rebinding event signed through the destination custodian.
-                if (!identity.deviceCertificate) {
-                    if (!bundle) {
-                        throw new Error("destination device certification was not completed before the source identity was retired");
-                    }
-                    await this._validateDestinationCrossSigningKeys(bundle, log);
-                    await identity.certifyDevice({
-                        deviceId: this._deviceId,
-                        masterSeed: base64ToBase64Url(bundle.masterSeed),
-                        selfSigningSeed: base64ToBase64Url(bundle.selfSigningSeed),
-                    });
-                }
-                await this._finishMoveHandoff(identity, sourceService, log, bundle);
-            }
-            return this.resumeMoveRebinds(log);
-        }
-        const bundle = await sourceService.exportMoveBundle(log);
-        try {
-            this._validateMoveBundle(bundle, custodian);
-            await this._validateDestinationCrossSigningKeys(bundle, log);
-            if (!this._secretFetcher?.hasSecretStorage) {
-                throw new Error("unlock destination secret storage before moving the Cygnus identity");
-            }
-        } catch (err) {
-            await sourceService.cancelMoveHandoff();
-            throw err;
-        }
-
         if (!identity) {
             const record = {
                 ...bundle.record,
+                links: bundle.links.slice(0, -1),
+                rotationSeed: bundle.rotationKey,
                 deviceId: this._deviceId,
                 deviceSeed: undefined,
                 deviceCertificate: undefined,
                 handoffPending: true,
-                revokedDeviceIds: [...new Set([...bundle.record.revokedDeviceIds, bundle.sourceDeviceId])],
+                revokedDeviceIds: bundle.revokedDeviceIds,
                 pendingRevocationImport: bundle.sourceDeviceId,
             };
             identity = await CygnusIdentity.importMoveRecord(record, {
@@ -196,41 +276,19 @@ export class CygnusService {
             throw new Error("destination session already has a different or active Cygnus identity");
         }
 
-        if (!identity.pendingRebindRoomIds.length && !identity.pendingMove) {
-            const pendingMove = await identity.prepareMove({
-                custodian,
-                displayUserId: this._userId,
-                roomIds: [...new Set([
-                    ...bundle.roomIds,
-                    ...roomIds,
-                    ...(bundle.record.pendingMove?.roomIds || []),
-                ])],
-            });
-            if (pendingMove.custodian !== custodian || pendingMove.displayUserId !== this._userId) {
-                throw new Error("pending Cygnus move targets a different destination");
-            }
+        const storedRotationKey = await this._secretFetcher.readSecretStorage("m.principal.rotation_key");
+        const storedSeed = storedRotationKey ? base64ToBase64Url(storedRotationKey) : undefined;
+        if (storedSeed && storedSeed !== bundle.rotationKey) {
+            throw new Error("destination secret storage already contains a different rotation key");
         }
+        await this._secretFetcher.writeSecret("m.principal.rotation_key", base64UrlToBase64(bundle.rotationKey), log);
         if (identity.pendingMove || identity.pendingRevocationImport) {
-            const storedRotationKey = await this._secretFetcher.readSecretStorage("m.principal.rotation_key");
-            const storedSeed = storedRotationKey ? base64ToBase64Url(storedRotationKey) : undefined;
-            const rotationSeedToPersist = identity.pendingMove?.nextRotationSeed || identity.rotationSeed;
-            if (storedSeed && storedSeed !== identity.rotationSeed && storedSeed !== rotationSeedToPersist) {
-                throw new Error("destination secret storage already contains a different rotation key");
-            }
-            // The destination copy must be durable before the custodian accepts
-            // the link, so a lost response can be retried without key loss.
-            await this._secretFetcher.writeSecret("m.principal.rotation_key", base64UrlToBase64(rotationSeedToPersist), log);
-            const links = identity.pendingMove ? [...identity.links, identity.pendingMove.link] : identity.links;
-            const revokedDeviceIds = [...new Set([...identity.revokedDeviceIds, bundle.sourceDeviceId])];
-            const response = await this._hsApi.cygnusImportPrincipal(links, revokedDeviceIds, {log}).response();
-            if (identity.pendingMove) {
-                await identity.completeMove(response.links, response.principal, this._hsApi);
-            } else {
-                await identity.adoptImportedChain(response.links, response.principal);
-            }
+            const response = await this._hsApi.cygnusImportPrincipal(
+                bundle.links, bundle.revokedDeviceIds, {log},
+            ).response();
+            await identity.completeMove(response.links, response.principal, this._hsApi);
             if (identity.pendingRevocationImport) await identity.clearPendingRevocationImport();
         }
-
         if (!identity.deviceCertificate) {
             await identity.certifyDevice({
                 deviceId: this._deviceId,
@@ -242,59 +300,12 @@ export class CygnusService {
         return this.resumeMoveRebinds(log);
     }
 
-    /** Export private move material from this (source) session for explicit local handoff. */
-    async exportMoveBundle(log) {
+    async acknowledgeMoveHandoff() {
         const identity = this.identity.get();
-        if (!identity || identity.isRetired) throw new Error("no active source Cygnus identity is available to move");
-        if (identity.hasPendingRotation) {
-            await identity.rotate({log});
+        if (identity?.isRetired) {
+            await identity.clearMoveBundle();
+            this.identity.set(identity);
         }
-        await identity.beginMoveHandoff();
-        try {
-            const [rotationKey, masterSeed, selfSigningSeed] = await Promise.all([
-                this._secretFetcher.readSecretStorage("m.principal.rotation_key"),
-                this._secretFetcher.readSecretStorage("m.cross_signing.master"),
-                this._secretFetcher.readSecretStorage("m.cross_signing.self_signing"),
-            ]);
-            const expectedRotationKey = identity.pendingMove?.nextRotationSeed || identity.rotationSeed;
-            if (!rotationKey || base64ToBase64Url(rotationKey) !== expectedRotationKey) {
-                throw new Error("source secret storage does not contain the current Cygnus rotation key");
-            }
-            if (!masterSeed || !selfSigningSeed || this._crypto.publicKey(base64ToBase64Url(masterSeed)) !== identity.masterKey) {
-                throw new Error("source secret storage does not contain the cross-signing keys for this identity");
-            }
-            const roomIds = await this._joinedCygnusRoomIds();
-            return {
-                version: 1,
-                record: identity.exportMoveRecord(),
-                rotationKey,
-                masterSeed,
-                selfSigningSeed,
-                sourceDeviceId: identity.deviceId,
-                roomIds: [...new Set([
-                    ...roomIds,
-                    ...(identity.pendingMove?.roomIds || []),
-                    ...identity.pendingRebindRoomIds,
-                ])],
-            };
-        } catch (err) {
-            await identity.cancelMoveHandoff();
-            throw err;
-        }
-    }
-
-    /** Stop the source signer and remove its rotation-key copy after destination backup. */
-    async retireAfterMove(log) {
-        const identity = this.identity.get();
-        if (!identity) return;
-        if (!identity.isRetired) await identity.retireAfterMove();
-        await this._secretFetcher.deleteSecret("m.principal.rotation_key", log);
-        this.identity.set(identity);
-    }
-
-    async cancelMoveHandoff() {
-        const identity = this.identity.get();
-        if (identity && !identity.isRetired) await identity.cancelMoveHandoff();
     }
 
     async _joinedCygnusRoomIds() {
@@ -318,62 +329,67 @@ export class CygnusService {
     }
 
     async _finishMoveHandoff(identity, sourceService, log, bundle) {
-        const masterSeed = bundle?.masterSeed ?? await this._secretFetcher.readSecretStorage("m.cross_signing.master");
-        const selfSigningSeed = bundle?.selfSigningSeed ?? await this._secretFetcher.readSecretStorage("m.cross_signing.self_signing");
-        if (!masterSeed || !selfSigningSeed) {
-            throw new Error("destination session is missing the carried cross-signing keys");
-        }
         const storedRotationKey = await this._secretFetcher.readSecretStorage("m.principal.rotation_key");
         const expectedRotationKey = base64ToBase64Url(identity.rotationSeed);
         if (storedRotationKey && base64ToBase64Url(storedRotationKey) !== expectedRotationKey) {
             throw new Error("destination secret storage contains a different rotation key");
         }
-        await this._secretFetcher.writeSecret("m.cross_signing.master", masterSeed, log);
-        await this._secretFetcher.writeSecret("m.cross_signing.self_signing", selfSigningSeed, log);
+        await this._secretFetcher.writeSecret("m.cross_signing.master", bundle.masterSeed, log);
+        await this._secretFetcher.writeSecret("m.cross_signing.self_signing", bundle.selfSigningSeed, log);
         await this._secretFetcher.writeSecret("m.principal.rotation_key", base64UrlToBase64(identity.rotationSeed), log);
         identity.setSecretFetcher(this._secretFetcher);
-        await sourceService.retireAfterMove(log);
+        await sourceService?.acknowledgeMoveHandoff();
         if (identity.isHandoffPending) await identity.finishMoveHandoff();
         this.identity.set(identity);
     }
 
     _validateMoveBundle(bundle, custodian) {
         if (bundle?.version !== 1 || !bundle.record || !bundle.sourceDeviceId ||
-            !Array.isArray(bundle.record.links) || !bundle.record.links.length ||
+            !Array.isArray(bundle.links) || !bundle.links.length ||
             typeof bundle.rotationKey !== "string" ||
             typeof bundle.masterSeed !== "string" ||
             typeof bundle.selfSigningSeed !== "string" ||
+            !Array.isArray(bundle.revokedDeviceIds) ||
+            !Array.isArray(bundle.roomIds) ||
             !bundle.record.principal || !bundle.record.custodian || !bundle.record.displayUserId ||
             !bundle.record.masterKey || !bundle.record.deviceId) {
             throw new Error("unsupported or incomplete Cygnus move bundle");
         }
-        const verified = this._crypto.verifyChain(bundle.record.links);
+        const verified = this._crypto.verifyChain(bundle.links);
         if (!verified.ok || verified.principal !== bundle.record.principal) {
             throw new Error(`source identity chain is invalid: ${verified.error ?? verified.principal}`);
         }
-        const tip = this._crypto.parseLink(bundle.record.links[bundle.record.links.length - 1]);
+        const tip = this._crypto.parseLink(bundle.links[bundle.links.length - 1]);
+        const priorLinks = bundle.links.slice(0, -1);
         if (bundle.sourceDeviceId !== bundle.record.deviceId ||
-            tip.custodian !== bundle.record.custodian ||
-            tip.display_user_id !== bundle.record.displayUserId ||
+            JSON.stringify(priorLinks) !== JSON.stringify(bundle.record.links) ||
+            tip.custodian !== custodian ||
+            tip.display_user_id !== this._userId ||
             tip.master_key !== bundle.record.masterKey ||
-            !Array.isArray(bundle.record.revokedDeviceIds) ||
-            !Array.isArray(bundle.roomIds)) {
+            !bundle.revokedDeviceIds.includes(bundle.sourceDeviceId) ||
+            bundle.record.pendingMove?.link !== bundle.links[bundle.links.length - 1] ||
+            bundle.record.pendingMove?.custodian !== custodian ||
+            bundle.record.pendingMove?.displayUserId !== this._userId) {
             throw new Error("move bundle identity fields do not match its verified chain");
         }
         const rotationSeed = base64ToBase64Url(bundle.rotationKey || "");
-        const expectedRotationSeed = bundle.record.pendingMove?.nextRotationSeed || bundle.record.rotationSeed;
-        if (!rotationSeed || rotationSeed !== expectedRotationSeed) {
-            throw new Error("move bundle rotation key does not match its pending identity state");
+        if (!rotationSeed || rotationSeed !== bundle.record.pendingMove?.nextRotationSeed) {
+            throw new Error("move bundle rotation key does not match its signed move state");
         }
-        if (bundle.record.pendingMove && bundle.record.pendingMove.custodian !== custodian) {
-            throw new Error("source has a pending move to a different custodian");
-        }
-        const hasPendingRebind = bundle.record.pendingRebindRooms?.length > 0;
-        if (!bundle.record.pendingMove && !hasPendingRebind && bundle.record.custodian === custodian) {
-            throw new Error("destination custodian is already the identity's current custodian");
-        }
-        if (hasPendingRebind && bundle.record.custodian !== custodian) {
-            throw new Error("pending rebinding state belongs to a different custodian");
+        // A synthetic successor proves that the carried seed opens the
+        // commitment in the signed move link. The probe is only verified
+        // locally and is never submitted to a homeserver.
+        const probeLink = this._crypto.userSuccessor(
+            bundle.links[bundle.links.length - 1],
+            rotationSeed,
+            this._crypto.generateSeed(),
+            custodian,
+            tip.master_key,
+            tip.display_user_id,
+        );
+        const probe = this._crypto.verifyChain([...bundle.links, probeLink]);
+        if (!probe.ok || probe.principal !== bundle.record.principal) {
+            throw new Error("move bundle next rotation key does not match the signed chain commitment");
         }
     }
 

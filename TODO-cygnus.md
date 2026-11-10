@@ -51,13 +51,10 @@ Nothing has run against a real homeserver yet; `../congruent` will be the first.
       incoming events aren't verified.
 - [ ] **Member panel.** Show each member's principal, custodian and chain
       height.
-- [ ] **Moving homeservers.** The two-session service handoff now carries the
-      source identity explicitly, imports the full chain and old device
-      revocation from the destination session, certifies the destination
-      device, backs up the key, retires the source signer, and retries signed
-      rebinding joins through the old display ID's server. The user-facing
-      encrypted handoff and move screen are still missing. See "Move handoff
-      design".
+- [ ] **Moving homeservers.** The service signs and encrypts the handoff on the
+      source, retires it before releasing the bundle, imports and certifies the
+      destination device, then sends signed rebinding joins. The user-facing
+      move screen is still missing. See "Move handoff design".
 - [ ] **Recovery.** No UI to back up or restore the rotation key, and no warning
       before a cross-signing reset (which permanently breaks the principal — its
       master key is the cross-signing master key).
@@ -79,50 +76,49 @@ regular Matrix APIs must follow the move anyway. Secret storage lives on the old
 homeserver, so the destination cannot read it: everything it needs is carried
 explicitly.
 
-**Source session (`exportMoveBundle`)**
+**Source session (`prepareMoveHandoff`)**
 
-1. Export a versioned bundle to the authenticated destination session. It
-   includes:
-    - the verified chain from genesis and any already-pending move link/state;
-    - the current rotation key and any pending move/rebind state;
+1. Sign the move link locally with the current rotation key. Retire the source
+   device before releasing anything: remove its rotation and device signing keys
+   so it cannot sign again. Encrypt and retain the bundle locally until the
+   destination confirms import. It includes:
+    - the verified chain from genesis plus the signed move link;
+    - the next rotation key, never the spent current key;
     - the cross-signing master and self-signing private keys;
     - revoked device IDs, plus this session's Cygnus device ID;
     - the joined Cygnus room IDs, and the old display ID's server for `via`.
-2. Lock signing on the source while the handoff is in progress. Keep its key
-   material until destination import and backup succeed so a failed transfer
-   can be exported again.
+2. If the app stops after source retirement, it can release the same encrypted
+   bundle again.
 
-**Destination session (`moveFrom`)**
+**Destination session (`importMoveHandoff`)**
 
-1. Validate the chain, keys and pending state from the bundle against this
-   account's published cross-signing keys.
-2. Sign the move link with the carried rotation key (or resume an existing
-   pending move). Back up its next key to destination secret storage before
-   submitting the link.
-3. `POST /principal/import` with the full chain and `revoked_device_ids`,
-   including the source device. Retry with the same links on failure; the call
-   is idempotent.
-4. Adopt the returned chain, then certify this session's device under the same
-   master and self-signing keys. Persist the new certificate and key locally
-   and in destination secret storage before signing room events.
-5. Retire the source signer and remove its rotation key from its local record
-   and old secret storage.
-6. Send a device-signed rebinding join in each room with `via` set to the old
-   display ID's server. The destination floor is established by its first
-   confirmed event; floors are keyed by principal, device and room.
+1. Decrypt and validate the source-signed chain, target account, master key, and
+   next rotation key against the signed move state and this account's published
+   cross-signing keys.
+2. `POST /principal/import` with the full chain and revoked-device list,
+   including the source device. Retry by importing the same encrypted bundle
+   after a lost response.
+3. Certify this session's device under the carried master and self-signing keys.
+   Persist the certificate and next rotation key locally and in destination
+   secret storage before signing room events.
+4. Acknowledge import so the source can delete its retained encrypted bundle.
+5. Send a device-signed rebinding join in each room with `via` set to the old
+   display ID's server. The new device starts without a room floor; its first
+   confirmed event establishes it.
 
 **Open questions**
 
 - **Cross-signing on the new account.** §5.2.1 binds the principal to the
   account's cross-signing master key, and `POST /principal` checks it. The
   destination account must publish the same master key as its cross-signing
-  master key; Hydrogen cannot upload cross-signing keys yet. The proposal
-  should say whether `/principal/import` checks this too.
+  master key; Hydrogen cannot upload cross-signing keys yet. The proposal should
+  say whether `/principal/import` checks this too.
 - **Source session after the move.** It stays logged in on the old homeserver,
   retired. Offer to log it out.
-- **Transport security.** The current service API passes the bundle in memory
-  between sessions. A user-facing flow must encrypt it for transport and avoid
-  logging or persisting it in plaintext.
+- **Move screen.** The service encrypts and retains the bundle; the UI still
+  needs to collect a passphrase before source preparation, transfer the
+  ciphertext, and offer recovery/retry. Once the source signs the move link,
+  the flow must resume that same link rather than cancel it.
 
 ## Client and homeserver protocol work
 

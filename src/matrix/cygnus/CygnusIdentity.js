@@ -132,6 +132,7 @@ export class CygnusIdentity {
     get isRetired() { return !!this._record.retired; }
     get isHandoffPending() { return !!this._record.handoffPending; }
     get pendingRevocationImport() { return this._record.pendingRevocationImport; }
+    get pendingMoveBundle() { return this._record.encryptedMoveBundle; }
 
     setHomeserverApi(hsApi) {
         this._hsApi = hsApi;
@@ -210,6 +211,19 @@ export class CygnusIdentity {
     async retireAfterMove() {
         const {rotationSeed, deviceSeed, deviceCertificate, pendingMove, pendingRotation, pendingRebindRooms, pendingRebindVia, ...rest} = this._record; // eslint-disable-line no-unused-vars
         this._record = {...rest, retired: true, handoffPending: false};
+        await this._persist();
+    }
+
+    /** Persist the encrypted recovery bundle atomically with destroying signer material. */
+    async retireWithMoveBundle(encryptedBundle) {
+        const {rotationSeed, deviceSeed, deviceCertificate, pendingMove, pendingRotation, pendingRebindRooms, pendingRebindVia, ...rest} = this._record; // eslint-disable-line no-unused-vars
+        this._record = {...rest, retired: true, handoffPending: false, encryptedMoveBundle: encryptedBundle};
+        await this._persist();
+    }
+
+    async clearMoveBundle() {
+        const {encryptedMoveBundle, ...rest} = this._record; // eslint-disable-line no-unused-vars
+        this._record = rest;
         await this._persist();
     }
 
