@@ -12,6 +12,33 @@ import {Heroes} from "./members/Heroes.js";
 import {MemberChange, RoomMember, EVENT_TYPE as MEMBER_EVENT_TYPE} from "./members/RoomMember.js";
 import {isCygnusRoomVersion} from "../cygnus/constants.js";
 
+function serverOf(userId) {
+    const colon = typeof userId === "string" ? userId.indexOf(":") : -1;
+    return colon === -1 ? undefined : userId.slice(colon + 1);
+}
+
+/**
+ * Resident servers to join a Cygnus room through. Senders are principals
+ * with no server part, and room version 12 room IDs name none, so take them
+ * from the epoch events in the invite state: each server epoch's
+ * `server_name`, and the domain of each user epoch's `display_user_id`.
+ */
+export function viaFromInviteState(inviteState) {
+    const servers = new Set();
+    for (const event of inviteState) {
+        const content = event?.content;
+        if (event?.type === "m.room.server_epoch" && typeof content?.server_name === "string") {
+            servers.add(content.server_name);
+        } else if (event?.type === "m.room.user_epoch") {
+            servers.add(serverOf(content?.display_user_id));
+        }
+        servers.add(serverOf(event?.sender));
+    }
+    servers.delete(undefined);
+    servers.delete("");
+    return [...servers];
+}
+
 export class Invite extends EventEmitter {
     constructor({roomId, user, hsApi, getCygnus, mediaRepository, emitCollectionRemove, emitCollectionUpdate, platform}) {
         super();
@@ -91,7 +118,7 @@ export class Invite extends EventEmitter {
                 if (this.isCygnus) {
                     const cygnus = this._getCygnus?.();
                     if (!cygnus?.identity.get()) throw new Error("create or restore your Cygnus identity before accepting this invite");
-                    await cygnus.joinRoom(this._roomId, log);
+                    await cygnus.joinRoom(this._roomId, log, this._inviteData?.via);
                 } else {
                     await this._hsApi.join(this._roomId, {log}).response();
                 }
@@ -218,6 +245,7 @@ export class Invite extends EventEmitter {
             canonicalAlias: summaryData.canonicalAlias,
             timestamp: this._platform.clock.now(),
             roomVersion: summaryData.roomVersion,
+            via: isCygnusRoomVersion(summaryData.roomVersion) ? viaFromInviteState(inviteState) : undefined,
             joinRule: this._getJoinRule(inviteState),
             inviter: inviter?.serialize(),
         };
@@ -362,6 +390,49 @@ export function tests() {
             assert.equal(invite.inviter.userId, "@alice:hs.tld");
             assert.equal(invite.inviter.displayName, "Alice");
             assert.equal(invite.inviter.avatarUrl, aliceAvatarUrl);
+        },
+        "cygnus invite is accepted and rejected with signed membership, joining via the epoch servers": async assert => {
+            const bob = "@Cl5rPGgj2s7JHMwFxSEOHfFYM_K0PDpnhXEMYwMgQuo";
+            const alice = "@AAAAPGgj2s7JHMwFxSEOHfFYM_K0PDpnhXEMYwMgQuo";
+            const cygnusRoomId = "!Ab9Vabc";
+            const inviteState = [
+                {type: "m.room.create", state_key: "", sender: alice, content: {room_version: "tk.nutra.cygnus.12"}},
+                {type: "m.room.user_epoch", state_key: alice, sender: alice, content: {display_user_id: "@alice:hs.tld"}},
+                {type: "m.room.server_epoch", state_key: "~srv", sender: alice, content: {server_name: "relay.tld"}},
+                {type: "m.room.member", state_key: alice, sender: alice, content: {membership: "join"}},
+                {type: "m.room.member", state_key: bob, sender: alice, content: {membership: "invite"}},
+            ];
+            const calls = [];
+            let fail = false;
+            const cygnus = {
+                identity: {get: () => ({principal: bob})},
+                joinRoom: async (id, log, via) => {
+                    calls.push(["join", id, via]);
+                    if (fail) throw new Error("draft refused");
+                },
+                leaveRoom: async id => { calls.push(["leave", id]); },
+            };
+            const invite = new Invite({
+                roomId: cygnusRoomId,
+                platform: {clock: new MockClock(1003), logger: {wrapOrRun: (log, name, fn) => fn(new NullLogItem())}},
+                user: {id: "@bob:hs.tld"},
+                hsApi: {join: () => { throw new Error("plain /join used"); }, leave: () => { throw new Error("plain /leave used"); }},
+                getCygnus: () => cygnus,
+                emitCollectionUpdate: () => {},
+            });
+            const txn = createStorage();
+            const changes = await invite.writeSync("invite", {invite_state: {events: inviteState}}, txn, new NullLogItem());
+            invite.afterSync(changes, new NullLogItem());
+            assert.equal(invite.isCygnus, true);
+            assert.equal(invite.inviter.userId, alice);
+            fail = true;
+            await assert.rejects(invite.accept());
+            assert.equal(invite.accepting, false);
+            fail = false;
+            await invite.accept();
+            assert.deepEqual(calls[1], ["join", cygnusRoomId, ["hs.tld", "relay.tld"]]);
+            await invite.reject();
+            assert.deepEqual(calls[2], ["leave", cygnusRoomId]);
         },
         "syncing join sets accepted": async assert => {
             let changeEmitCount = 0;

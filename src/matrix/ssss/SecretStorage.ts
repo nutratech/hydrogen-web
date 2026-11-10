@@ -166,3 +166,73 @@ export class SecretStorage {
         return utf8.decode(plaintextBytes);
     }
 }
+
+/* eslint-disable @typescript-eslint/explicit-function-return-type -- test mocks */
+export function tests() {
+    /** A platform with real WebCrypto, so the write path is checked against the read path. */
+    async function platform(): Promise<any> {
+        const {webcrypto} = await import("node:crypto");
+        const {Crypto} = await import("../../platform/web/dom/Crypto.js");
+        const {Encoding} = await import("../../platform/web/utils/Encoding.js");
+        const g = globalThis as any;
+        const previous = g.window;
+        g.window = {crypto: webcrypto};
+        try {
+            return {crypto: new Crypto(undefined), encoding: new Encoding()};
+        } finally {
+            g.window = previous;
+        }
+    }
+
+    function accountDataStorage(initial: Record<string, any> = {}): any {
+        const entries = new Map<string, any>(Object.entries(initial).map(([type, content]) => [type, {type, content}]));
+        const txn = {
+            accountData: {
+                get: async (type: string) => entries.get(type),
+                set: (entry: any) => entries.set(entry.type, entry),
+            },
+            complete: async () => {},
+            abort: () => {},
+        };
+        return {entries, storeNames: {accountData: "accountData"}, readTxn: async () => txn, readWriteTxn: async () => txn};
+    }
+
+    function key(id: string, byte: number): Key {
+        // structural stand-in for Key: SecretStorage only reads these three
+        return {id, algorithm: "m.secret_storage.v1.aes-hmac-sha2", binaryKey: new Uint8Array(32).fill(byte)} as unknown as Key;
+    }
+
+    function hsApi(): any {
+        const sent: any[] = [];
+        return {sent, setAccountData: (userId: string, type: string, content: any) => {
+            sent.push({userId, type, content});
+            return {response: async () => ({})};
+        }};
+    }
+
+    return {
+        "a written secret reads back through the existing decryption path": async (assert: any) => {
+            const storage = accountDataStorage();
+            const api = hsApi();
+            const ssss = new SecretStorage({key: key("k1", 7), platform: await platform(), storage, hsApi: api, userId: "@a:hs"});
+            await ssss.writeSecret("m.principal.rotation_key", "ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISE");
+            assert.equal(api.sent[0].type, "m.principal.rotation_key");
+            assert.equal(await ssss.readSecret("m.principal.rotation_key"), "ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISE");
+        },
+        "a write replaces copies encrypted under other keys": async (assert: any) => {
+            const storage = accountDataStorage({"m.principal.rotation_key": {encrypted: {old: {iv: "", ciphertext: "", mac: ""}}}});
+            const ssss = new SecretStorage({key: key("k1", 7), platform: await platform(), storage, hsApi: hsApi(), userId: "@a:hs"});
+            await ssss.writeSecret("m.principal.rotation_key", "next");
+            assert.deepEqual(Object.keys(storage.entries.get("m.principal.rotation_key").content.encrypted), ["k1"]);
+        },
+        "another key cannot read the secret": async (assert: any) => {
+            const storage = accountDataStorage();
+            const p = await platform();
+            await new SecretStorage({key: key("k1", 7), platform: p, storage, hsApi: hsApi(), userId: "@a:hs"}).writeSecret("s", "value");
+            const entry = storage.entries.get("s");
+            entry.content.encrypted.k2 = entry.content.encrypted.k1;
+            await assert.rejects(new SecretStorage({key: key("k2", 9), platform: p, storage}).readSecret("s"));
+        },
+    };
+}
+/* eslint-enable @typescript-eslint/explicit-function-return-type */
