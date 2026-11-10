@@ -55,8 +55,12 @@ A `RoomRouter` (or the room handle itself) is the one place that knows owners.
 ### Failure and logout
 
 - **Source unreachable or its token expired:** its rooms show from cache in a
-  **Legacy** area, read-only, with a re-authenticate action. This reflects the
-  connection state; it is not what makes legacy rooms work.
+  **Legacy** area, read-only. This reflects the connection state; it is not
+  what makes legacy rooms work. "Down" means one of:
+    - the token is rejected (`M_UNKNOWN_TOKEN`, soft logout): offer
+      re-authentication, keeping the room cache;
+    - the server is unreachable (DNS, TLS or connection failure, 5xx): the
+      reconnector keeps retrying in the background, as it does today.
 - **Destination unreachable:** its rooms are read-only from cache; sends queue.
 - **Logout:** "Remove workspace" logs out both connections. "Retire old
   account" logs out only the source, after its rooms are moved or given up.
@@ -112,25 +116,43 @@ the key is spent, so the move is retry-only:
    rotation key is deleted locally and from its secret storage.
 6. The destination sends a signed rebinding join in each Cygnus room, `via` the
    old display ID's server. Each confirmed rebind moves that room's ownership
-   to the destination. Its history is refetched by the destination, because
-   pagination tokens are issued per server.
+   to the destination, and the room's local history moves with it (below).
+
+### Keeping history when a room changes owner
+
+The room ID is stable, so the user should not lose anything when ownership
+moves. On transfer the workspace copies the room's records from the source's
+storage into the destination's: summary, timeline fragments and events, room
+state, members, read receipts and unread counts. Only pagination restarts: the
+copied fragments keep their events but drop the source's pagination tokens and
+end in a gap, so the next backfill asks the destination server. The source's
+copy is then hidden, and deleted when the source is retired.
 
 The encrypted move bundle (`19d50f93`) remains for moving to a different
 device, where the two connections are not in the same browser.
 
 ## Sequencing
 
-Do not combine the workspace refactor with the Cygnus move in one change; the
-move needs a stable routing layer underneath it.
+Do not combine the workspace refactor with the Cygnus move in one change: the
+move changes a room's owner, so ownership and routing must exist first. One
+agent owns the whole refactor on `feat/cygnus-workspace`, and it merges only
+after the Node 18 suite and both lints pass.
 
-1. `Workspace` and `AccountConnection` with one connection; no behaviour change.
-2. Persistent room ownership; existing rooms are assigned to the source.
-3. Route room operations through the owner.
-4. Second connection: hidden `sessionInfo`, its own sync, merged room list and
-   sync status, the Legacy area for a failed source, both logout actions.
-5. Destination login with the same device ID, and the cross-signing upload.
-6. The Cygnus move and per-room ownership transfer.
-7. The move screen.
+1. Login and registration with a requested device ID, checking the returned
+   one. Isolated.
+2. Cross-signing upload on the destination account. Isolated, and a hard
+   prerequisite for the move.
+3. `Workspace`, `AccountConnection` and persistent room ownership, with the
+   source connection only. Existing rooms are assigned to the source. No
+   behaviour change.
+4. Route every room operation through its owner, with tests for send,
+   receipt, invite, leave and media.
+5. The second connection: hidden `sessionInfo`, a full sync with its own E2EE
+   (so new ordinary rooms can be encrypted), merged room list, notifications
+   and sync status.
+6. The Cygnus move: source signs and locks, retry the import, rebind, then
+   transfer ownership with the room's history.
+7. The move screen, the Legacy area and the two logout actions.
 
 ## Open questions
 
