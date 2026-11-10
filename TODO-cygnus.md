@@ -51,9 +51,13 @@ Nothing has run against a real homeserver yet; `../congruent` will be the first.
       incoming events aren't verified.
 - [ ] **Member panel.** Show each member's principal, custodian and chain
       height.
-- [ ] **Moving homeservers.** Plumbing exists (full-chain import, persisted
-      retries, rebinding joins via the old display ID's server); the two-session
-      handoff below and the move screen do not. See "Move handoff design".
+- [ ] **Moving homeservers.** The two-session service handoff now carries the
+      source identity explicitly, imports the full chain and old device
+      revocation from the destination session, certifies the destination
+      device, backs up the key, retires the source signer, and retries signed
+      rebinding joins through the old display ID's server. The user-facing
+      encrypted handoff and move screen are still missing. See "Move handoff
+      design".
 - [ ] **Recovery.** No UI to back up or restore the rotation key, and no warning
       before a cross-signing reset (which permanently breaks the principal — its
       master key is the cross-signing master key).
@@ -75,49 +79,37 @@ regular Matrix APIs must follow the move anyway. Secret storage lives on the old
 homeserver, so the destination cannot read it: everything it needs is carried
 explicitly.
 
-**Source session (`exportMoveHandoff`)**
+**Source session (`exportMoveBundle`)**
 
-1. Take the destination's custodian principal and new `display_user_id` (shown
-   by the destination session; typed or scanned by the user).
-2. Sign the move link with the current rotation key and generate the next one.
-   The current key never leaves this device.
-3. Build the handoff bundle:
-    - the chain from genesis plus the signed move link;
-    - the **next** rotation key (the one the move link commits to);
+1. Export a versioned bundle to the authenticated destination session. It
+   includes:
+    - the verified chain from genesis and any already-pending move link/state;
+    - the current rotation key and any pending move/rebind state;
     - the cross-signing master and self-signing private keys;
     - revoked device IDs, plus this session's Cygnus device ID;
     - the joined Cygnus room IDs, and the old display ID's server for `via`.
-4. Persist the identity as **retired** before returning the bundle: the spent
-   rotation key is destroyed, and the session refuses to sign events, rotate or
-   move from then on. Retiring first means a crash cannot leave two signers.
-5. Encrypt the bundle for transport (passphrase or a QR code scanned by the
-   destination). It holds the master key, so it must never be shown or stored
-   in plaintext.
+2. Lock signing on the source while the handoff is in progress. Keep its key
+   material until destination import and backup succeed so a failed transfer
+   can be exported again.
 
-**Destination session (`importMoveHandoff`)**
+**Destination session (`moveFrom`)**
 
-1. Decrypt the bundle and check it: the chain plus move link verifies to the
-   principal; the move link names this homeserver's custodian and this
-   account's user ID; the master private key matches the chain's `master_key`;
-   the next rotation key matches the move link's `next_commit`.
-2. Certify this session's device under the same master and self-signing keys
-   (new device seed and `device_certificate`) and persist the identity with the
-   move pending. This happens before anything is signed through the new
-   custodian, including the rebinding joins.
-3. Back up the next rotation key to this account's secret storage
-   (`m.principal.rotation_key`).
-4. `POST /principal/import` with the full chain and `revoked_device_ids`
-   (including the source device). Retry with the same links on failure; the
-   call is idempotent.
-5. Send a device-signed rebinding join in each room, with `via` set to the old
-   display ID's server. The device floor needs no seeding: floors are keyed by
-   (principal, device, room), so the new device has none until its first
-   confirmed event becomes its floor.
-
-`moveToCustodian` keeps refusing a session whose device ID differs from the
-identity's certificate. In this flow step 2 has already certified the
-destination device, so the check passes; it still stops a session from signing
-with another device's certificate.
+1. Validate the chain, keys and pending state from the bundle against this
+   account's published cross-signing keys.
+2. Sign the move link with the carried rotation key (or resume an existing
+   pending move). Back up its next key to destination secret storage before
+   submitting the link.
+3. `POST /principal/import` with the full chain and `revoked_device_ids`,
+   including the source device. Retry with the same links on failure; the call
+   is idempotent.
+4. Adopt the returned chain, then certify this session's device under the same
+   master and self-signing keys. Persist the new certificate and key locally
+   and in destination secret storage before signing room events.
+5. Retire the source signer and remove its rotation key from its local record
+   and old secret storage.
+6. Send a device-signed rebinding join in each room with `via` set to the old
+   display ID's server. The destination floor is established by its first
+   confirmed event; floors are keyed by principal, device and room.
 
 **Open questions**
 
@@ -128,10 +120,9 @@ with another device's certificate.
   should say whether `/principal/import` checks this too.
 - **Source session after the move.** It stays logged in on the old homeserver,
   retired. Offer to log it out.
-- **A lost bundle.** Once the source has retired, the bundle holds the only
-  copy of the next rotation key. If it is lost before import, the chain cannot
-  be extended again. The source should keep the encrypted bundle until the
-  destination confirms the import.
+- **Transport security.** The current service API passes the bundle in memory
+  between sessions. A user-facing flow must encrypt it for transport and avoid
+  logging or persisting it in plaintext.
 
 ## Client and homeserver protocol work
 

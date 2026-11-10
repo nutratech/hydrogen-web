@@ -237,7 +237,9 @@ export function rotationCommitment(rotation_seed) {
  * The custodian signature is added by the server.
  *
  * # Errors
- * Throws if the event is not valid JSON or a seed is malformed.
+ * Throws if the event is not valid JSON, lacks an object-valued
+ * `device_certificate`, the event sender or certificate's `device_id` /
+ * `device_key` does not match the signing arguments, or a seed is malformed.
  * @param {string} event_json
  * @param {string} sender
  * @param {string} device_id

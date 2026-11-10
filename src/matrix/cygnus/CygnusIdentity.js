@@ -63,6 +63,12 @@ export class CygnusIdentity {
         return record ? new CygnusIdentity(record, {storage, hsApi, crypto, secretFetcher}) : undefined;
     }
 
+    static async importMoveRecord(record, {storage, hsApi, crypto}) {
+        const identity = new CygnusIdentity(record, {storage, hsApi, crypto});
+        await identity._persist();
+        return identity;
+    }
+
     /**
      * Mint a user principal with the custodian (§7) and certify a new device
      * key under the account's cross-signing keys.
@@ -111,6 +117,7 @@ export class CygnusIdentity {
     get masterKey() { return this._record.masterKey; }
     get deviceId() { return this._record.deviceId; }
     get deviceCertificate() { return this._record.deviceCertificate; }
+    get rotationSeed() { return this._record.rotationSeed; }
     get revokedDeviceIds() { return this._record.revokedDeviceIds.slice(); }
     get links() { return this._record.links.slice(); }
     /** Height of the tip link; genesis is 0. */
@@ -122,13 +129,23 @@ export class CygnusIdentity {
     get pendingRebindVia() {
         return (this._record.pendingRebindVia || this._record.pendingMove?.rebindVia || []).slice();
     }
+    get isRetired() { return !!this._record.retired; }
+    get isHandoffPending() { return !!this._record.handoffPending; }
+    get pendingRevocationImport() { return this._record.pendingRevocationImport; }
 
     setHomeserverApi(hsApi) {
         this._hsApi = hsApi;
     }
 
+    setSecretFetcher(secretFetcher) {
+        this._secretFetcher = secretFetcher;
+    }
+
     /** Remember a permanently revoked Matrix device ID for the next custodian import. */
     async revokeDevice(deviceId) {
+        if (this._record.retired || this._record.handoffPending) {
+            throw new Error("this device cannot revoke devices while its Cygnus identity is being moved");
+        }
         if (!deviceId || typeof deviceId !== "string") {
             throw new TypeError("a Matrix device ID is required");
         }
@@ -142,7 +159,58 @@ export class CygnusIdentity {
 
     /** Device-sign an event that already carries this identity's certificate. */
     signEvent(event) {
+        if (this._record.retired || this._record.handoffPending || !this._record.deviceCertificate) {
+            throw new Error("this device is not certified to sign with the Cygnus identity");
+        }
         return this._crypto.signEvent(event, this.principal, this.deviceId, this._record.deviceSeed);
+    }
+
+    async beginMoveHandoff() {
+        if (this._record.retired) throw new Error("this Cygnus identity was already moved");
+        this._record = {...this._record, handoffPending: true};
+        await this._persist();
+    }
+
+    async cancelMoveHandoff() {
+        if (this._record.pendingMove || this._record.pendingRebindRooms?.length || this._record.retired) return;
+        const {handoffPending, ...rest} = this._record; // eslint-disable-line no-unused-vars
+        this._record = rest;
+        await this._persist();
+    }
+
+    exportMoveRecord() {
+        const record = {...this._record};
+        delete record.deviceSeed;
+        delete record.deviceCertificate;
+        return JSON.parse(JSON.stringify(record));
+    }
+
+    async certifyDevice({deviceId, masterSeed, selfSigningSeed}) {
+        if (this._crypto.publicKey(masterSeed) !== this.masterKey) {
+            throw new Error("destination cross-signing master key does not match the Cygnus identity");
+        }
+        const deviceSeed = this._crypto.generateSeed();
+        const deviceCertificate = this._crypto.createDeviceCertificate(
+            this.principal,
+            masterSeed,
+            selfSigningSeed,
+            deviceId,
+            deviceSeed,
+        );
+        this._record = {...this._record, deviceId, deviceSeed, deviceCertificate};
+        await this._persist();
+    }
+
+    async finishMoveHandoff() {
+        const {handoffPending, ...rest} = this._record; // eslint-disable-line no-unused-vars
+        this._record = rest;
+        await this._persist();
+    }
+
+    async retireAfterMove() {
+        const {rotationSeed, deviceSeed, deviceCertificate, pendingMove, pendingRotation, pendingRebindRooms, pendingRebindVia, ...rest} = this._record; // eslint-disable-line no-unused-vars
+        this._record = {...rest, retired: true, handoffPending: false};
+        await this._persist();
     }
 
     /**
@@ -157,6 +225,9 @@ export class CygnusIdentity {
      * chain.
      */
     async rotate({log} = {}) {
+        if (this._record.retired || this._record.handoffPending) {
+            throw new Error("this device cannot rotate while its Cygnus identity is being moved");
+        }
         // A pending move has already signed the next link with the current
         // rotation key; a second link at that height would be a burn (§4.2).
         if (this._record.pendingMove) {
@@ -250,6 +321,25 @@ export class CygnusIdentity {
             pendingRebindVia: pending.rebindVia,
         };
         if (hsApi) this.setHomeserverApi(hsApi);
+        await this._persist();
+    }
+
+    async adoptImportedChain(links, principal) {
+        const verified = this._crypto.verifyChain(links);
+        if (!verified.ok || verified.principal !== this.principal || (principal && principal !== this.principal)) {
+            throw new Error(`imported chain does not match this identity: ${verified.error ?? verified.principal}`);
+        }
+        const tip = this._crypto.parseLink(links[links.length - 1]);
+        if (tip.custodian !== this.custodian || tip.display_user_id !== this.displayUserId) {
+            throw new Error("imported chain tip does not match the destination identity");
+        }
+        this._record = {...this._record, links};
+        await this._persist();
+    }
+
+    async clearPendingRevocationImport() {
+        const {pendingRevocationImport, ...rest} = this._record; // eslint-disable-line no-unused-vars
+        this._record = rest;
         await this._persist();
     }
 

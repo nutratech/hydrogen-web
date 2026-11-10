@@ -17,6 +17,10 @@ export class SecretFetcher {
     public secretStorage: SecretStorage;
     public secretSharing: SecretSharing;
 
+    get hasSecretStorage(): boolean {
+        return !!this.secretStorage;
+    }
+
     async getSecret(name: string): Promise<string | undefined> {
         /**
          * Note that we don't ask another device for secret here;
@@ -44,6 +48,13 @@ export class SecretFetcher {
             throw new Error("unlock secret storage before saving this secret");
         }
         await this.secretStorage.writeSecret(name, secret, log);
+    }
+
+    async deleteSecret(name: string, log?: object): Promise<void> {
+        if (!this.secretStorage) {
+            throw new Error("unlock secret storage before removing this secret");
+        }
+        await this.secretStorage.deleteSecret(name, log);
     }
 
     setSecretSharing(sharing: SecretSharing): void {

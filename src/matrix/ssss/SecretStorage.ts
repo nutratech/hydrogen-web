@@ -97,6 +97,25 @@ export class SecretStorage {
         await writeTxn.complete();
     }
 
+    async deleteSecret(name: string, log?: object): Promise<void> {
+        if (!this._hsApi || !this._userId) {
+            throw new Error("secret storage cannot write account data in this session");
+        }
+        const txn = await this._storage.readTxn([this._storage.storeNames.accountData]);
+        const existing = await txn.accountData.get(name);
+        if (!existing) return;
+        const content = {...existing.content, encrypted: {}};
+        await this._hsApi.setAccountData(this._userId, name, content, {log}).response();
+        const writeTxn = await this._storage.readWriteTxn([this._storage.storeNames.accountData]);
+        try {
+            writeTxn.accountData.set({type: name, content});
+        } catch (err) {
+            writeTxn.abort();
+            throw err;
+        }
+        await writeTxn.complete();
+    }
+
     async _encryptAESSecret(type: string, secret: string): Promise<EncryptedData> {
         const {base64, utf8} = this._platform.encoding;
         const hkdfKey = await this._platform.crypto.derive.hkdf(
@@ -232,6 +251,16 @@ export function tests() {
             const entry = storage.entries.get("s");
             entry.content.encrypted.k2 = entry.content.encrypted.k1;
             await assert.rejects(new SecretStorage({key: key("k2", 9), platform: p, storage}).readSecret("s"));
+        },
+        "deleting a secret removes every encrypted copy from account data": async (assert: any) => {
+            const storage = accountDataStorage();
+            const api = hsApi();
+            const ssss = new SecretStorage({key: key("k1", 7), platform: await platform(), storage, hsApi: api, userId: "@a:hs"});
+            await ssss.writeSecret("s", "value");
+            await ssss.deleteSecret("s");
+            assert.deepEqual(storage.entries.get("s").content.encrypted, {});
+            assert.deepEqual(api.sent[1].content.encrypted, {});
+            await assert.rejects(ssss.readSecret("s"));
         },
     };
 }

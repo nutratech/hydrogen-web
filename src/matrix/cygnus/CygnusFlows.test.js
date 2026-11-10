@@ -114,9 +114,12 @@ function memorySecrets(initial = {}) {
     const secrets = new Map(Object.entries(initial));
     const writes = [];
     return {
+        hasSecretStorage: true,
         secrets, writes,
         readSecretStorage: async name => secrets.get(name),
         writeSecret: async (name, value) => { writes.push(name); secrets.set(name, value); },
+        getSecret: async name => secrets.get(name),
+        deleteSecret: async name => secrets.delete(name),
     };
 }
 
@@ -166,13 +169,15 @@ function draftFor(crypto, identity, req, {prevEvents = ["$prev"], authEvents = [
 function assistedApi(crypto, identity, {draft, extendTip = true} = {}) {
     const sent = [];
     const drafts = [];
+    const getIdentity = typeof identity === "function" ? identity : () => identity;
     let tip;
     const api = {
         cygnusEventDraft: body => {
             drafts.push(body);
+            const currentIdentity = getIdentity();
             const req = {roomId: body.room_id, type: body.type, stateKey: body.state_key, content: body.content};
             const prevEvents = extendTip && tip ? [tip] : ["$prev"];
-            return request({event: draft ? draft(req, prevEvents) : draftFor(crypto, identity, req, {prevEvents})});
+            return request({event: draft ? draft(req, prevEvents) : draftFor(crypto, currentIdentity, req, {prevEvents})});
         },
         cygnusSendSigned: (txnId, event) => {
             const cert = event.device_certificate;
@@ -253,55 +258,144 @@ export function tests() {
             assert.equal(identity.height, 1);
             assert.equal(identity.hasPendingRotation, false);
         },
-        "a move imports the full chain, survives a lost response and rebinds rooms": async assert => {
-            const {identity, crypto, storage} = await aliceIdentity([SELF_SIGNING, USR_ROT_2]);
-            const service = new CygnusService({storage, hsApi: {}, userId: "@alice:chat.example.org", deviceId: "HYDROGEN"});
-            service._crypto = crypto;
-            service._isSupported = true;
-            service.identity.set(identity);
+        "destination-session move transfers secrets, recertifies its device and retries rebinding": async assert => {
+            const sourceSecrets = memorySecrets({
+                "m.cross_signing.master": toStandard(USR_MSK),
+                "m.cross_signing.self_signing": toStandard(SELF_SIGNING),
+            });
+            const {identity, crypto, storage} = await aliceIdentity([SELF_SIGNING, USR_ROT_2], {secretFetcher: sourceSecrets});
+            const sourceService = new CygnusService({
+                storage, hsApi: {}, secretFetcher: sourceSecrets,
+                userId: "@alice:chat.example.org", deviceId: "HYDROGEN",
+            });
+            sourceService._crypto = crypto;
+            sourceService._isSupported = true;
+            sourceService.identity.set(identity);
             const serverB = crypto.verifyChain([SERVER_B_GENESIS]).principal;
-            const {api: destination, sent, drafts} = assistedApi(crypto, identity);
+            const destinationSecrets = memorySecrets();
+            const destinationStorage = memoryStorage();
+            let destinationService;
+            const {api: destination, sent, drafts} = assistedApi(crypto, () => destinationService.identity.get());
+            destinationService = new CygnusService({
+                storage: destinationStorage,
+                hsApi: destination,
+                secretFetcher: destinationSecrets,
+                userId: "@alice:second.example.net",
+                deviceId: "DESTINATION",
+            });
+            destinationService._crypto = crypto;
+            destinationService._isSupported = true;
+            destination.queryKeys = () => request({
+                master_keys: {[destinationService._userId]: {keys: {master: crypto.publicKey(USR_MSK)}}},
+                self_signing_keys: {[destinationService._userId]: {keys: {self_signing: crypto.publicKey(SELF_SIGNING)}}},
+            });
             const imports = [];
-            let fail = true;
+            let failImport = true;
             destination.cygnusImportPrincipal = (links, revoked) => {
                 imports.push({links, revoked});
-                return request(fail ? new Error("offline") : {principal: USER_U, links});
+                assert.equal(destinationSecrets.secrets.get(ROTATION_KEY_SECRET), toStandard(USR_ROT_2));
+                if (failImport) {
+                    failImport = false;
+                    return request(new Error("offline"));
+                }
+                return request({principal: USER_U, links});
             };
-            const move = {hsApi: destination, deviceId: "HYDROGEN", custodian: serverB, displayUserId: "@alice:second.example.net", roomIds: [ROOM_ID, ROOM_ID]};
-            await assert.rejects(service.moveToCustodian(move));
-            // the signed move link holds the old rotation key, so rotating now would fork the chain
+            const sendSigned = destination.cygnusSendSigned;
+            let failSend = true;
+            destination.cygnusSendSigned = (txnId, event, options) => {
+                if (failSend) {
+                    failSend = false;
+                    return request(new Error("offline"));
+                }
+                return sendSigned(txnId, event, options);
+            };
+            const move = {custodian: serverB, roomIds: [ROOM_ID, ROOM_ID]};
+            await assert.rejects(destinationService.moveFrom(sourceService, move));
+            assert.equal(identity.isHandoffPending, true);
             await assert.rejects(identity.rotate());
-            fail = false;
-            await service.moveToCustodian(move);
+            assert.throws(() => identity.signEvent({}), /not certified to sign/);
+            await assert.rejects(destinationService.moveFrom(sourceService, move), /offline/);
             assert.equal(imports.length, 2);
             assert.equal(imports[0].links.length, 2);
             assert.equal(imports[0].links[0], U0);
             assert.equal(imports[0].links[1], imports[1].links[1]);
-            assert.equal(identity.custodian, serverB);
-            assert.equal(identity.displayUserId, "@alice:second.example.net");
-            assert.equal(identity.height, 1);
-            assert.equal(crypto.parseLink(identity.links[1]).custodian, serverB);
-            assert.equal(storage.values.get(IDENTITY_SESSION_KEY).rotationSeed, USR_ROT_2);
-            // one device-signed rebinding join per room, naming the new custodian
+            assert(imports[1].revoked.includes("HYDROGEN"));
+            const movedIdentity = destinationService.identity.get();
+            assert.equal(movedIdentity.custodian, serverB);
+            assert.equal(movedIdentity.displayUserId, "@alice:second.example.net");
+            assert.equal(movedIdentity.height, 1);
+            assert.equal(crypto.parseLink(movedIdentity.links[1]).custodian, serverB);
+            assert.equal(movedIdentity.deviceCertificate.device_id, "DESTINATION");
+            assert.equal(destinationSecrets.secrets.get(ROTATION_KEY_SECRET), toStandard(USR_ROT_2));
+            assert.equal(sourceSecrets.secrets.has(ROTATION_KEY_SECRET), false);
+            assert.equal(identity.isRetired, true);
+            assert.equal(storage.values.get(IDENTITY_SESSION_KEY).rotationSeed, undefined);
+            // A confirmed destination join seeds the new device's room floor.
+            await destinationService.resumeMoveRebinds();
             assert.equal(sent.length, 1);
             assert.equal(sent[0].type, "m.room.member");
             assert.equal(sent[0].content.custodian, serverB);
+            assert.equal(sent[0].device_certificate.device_id, "DESTINATION");
             assert.deepEqual(drafts[0].via, ["chat.example.org"]);
-            assert.equal(identity.pendingRebindRoomIds.length, 0);
-            assert.equal(identity.pendingMove, undefined);
+            const floorKey = JSON.stringify([USER_U, "DESTINATION", ROOM_ID]);
+            assert.equal(destinationStorage.values.get(FLOORS_SESSION_KEY)[floorKey], crypto.eventId(sent[0]).eventId);
+            assert.equal(movedIdentity.pendingRebindRoomIds.length, 0);
         },
-        "a move refuses a destination device without a Cygnus certificate": async assert => {
-            const {identity, crypto, storage} = await aliceIdentity([SELF_SIGNING, USR_ROT_2]);
-            const service = new CygnusService({storage, hsApi: {}, userId: "@alice:chat.example.org", deviceId: "HYDROGEN"});
-            service._crypto = crypto;
-            service._isSupported = true;
-            service.identity.set(identity);
+        "move retry certifies the destination before retiring the source": async assert => {
+            const sourceSecrets = memorySecrets({
+                "m.cross_signing.master": toStandard(USR_MSK),
+                "m.cross_signing.self_signing": toStandard(SELF_SIGNING),
+            });
+            const {identity, crypto, storage} = await aliceIdentity([SELF_SIGNING, USR_ROT_2], {secretFetcher: sourceSecrets});
+            const sourceService = new CygnusService({
+                storage, hsApi: {}, secretFetcher: sourceSecrets,
+                userId: "@alice:chat.example.org", deviceId: "HYDROGEN",
+            });
+            sourceService._crypto = crypto;
+            sourceService._isSupported = true;
+            sourceService.identity.set(identity);
             const serverB = crypto.verifyChain([SERVER_B_GENESIS]).principal;
-            await assert.rejects(service.moveToCustodian({
-                hsApi: {}, deviceId: "NEW_DEVICE", custodian: serverB,
-                displayUserId: "@alice:second.example.net", roomIds: [ROOM_ID],
-            }), /needs a Cygnus certificate/);
-            assert.equal(identity.pendingMove, undefined);
+            const destinationSecrets = memorySecrets();
+            const destinationStorage = memoryStorage();
+            let destinationService;
+            const {api: destination} = assistedApi(crypto, () => destinationService.identity.get());
+            destinationService = new CygnusService({
+                storage: destinationStorage,
+                hsApi: destination,
+                secretFetcher: destinationSecrets,
+                userId: "@alice:second.example.net",
+                deviceId: "DESTINATION",
+            });
+            destinationService._crypto = crypto;
+            destinationService._isSupported = true;
+            destination.queryKeys = () => request({
+                master_keys: {[destinationService._userId]: {keys: {master: crypto.publicKey(USR_MSK)}}},
+                self_signing_keys: {[destinationService._userId]: {keys: {self_signing: crypto.publicKey(SELF_SIGNING)}}},
+            });
+            destination.cygnusImportPrincipal = links => request({principal: USER_U, links});
+            const createCertificate = crypto.createDeviceCertificate.bind(crypto);
+            let failCertification = true;
+            crypto.createDeviceCertificate = (...args) => {
+                if (failCertification) {
+                    failCertification = false;
+                    throw new Error("temporary certification failure");
+                }
+                return createCertificate(...args);
+            };
+
+            const move = {custodian: serverB, roomIds: []};
+            await assert.rejects(destinationService.moveFrom(sourceService, move), /temporary certification failure/);
+            const importedIdentity = destinationService.identity.get();
+            assert.equal(importedIdentity.custodian, serverB);
+            assert.equal(importedIdentity.deviceCertificate, undefined);
+            assert.equal(importedIdentity.isHandoffPending, true);
+            assert.equal(identity.isRetired, false);
+
+            await destinationService.moveFrom(sourceService, move);
+            assert.equal(destinationService.identity.get().deviceCertificate.device_id, "DESTINATION");
+            assert.equal(identity.isRetired, true);
+            assert.equal(destinationSecrets.secrets.has(ROTATION_KEY_SECRET), true);
+            assert.equal(sourceSecrets.secrets.has(ROTATION_KEY_SECRET), false);
         },
         "join drafts carry via only when given": async assert => {
             const {identity, crypto, storage} = await aliceIdentity();
