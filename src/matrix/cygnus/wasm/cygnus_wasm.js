@@ -120,30 +120,35 @@ export function verifyChain(links) {
 /**
  * Verify a custodian (server) signature over an event at a chain height.
  *
+ * `height` is a decimal string, since protocol heights are `u64` and exceed
+ * what a JS number represents exactly.
+ *
  * # Errors
  * Throws if the signature entry is missing, malformed or invalid.
  * @param {string} event_json
  * @param {string} custodian
- * @param {number} height
+ * @param {string} height
  * @param {string} public_key
  */
 export function verifyCustodianSignature(event_json, custodian, height, public_key) {
-    const val4 = +height;
-    let ptr0, len0, ptr1, len1, ptr2, len2;
+    let ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3;
     try {
         ptr0 = passStringToWasm0(event_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         len0 = WASM_VECTOR_LEN;
         ptr1 = passStringToWasm0(custodian, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         len1 = WASM_VECTOR_LEN;
-        ptr2 = passStringToWasm0(public_key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        ptr2 = passStringToWasm0(height, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         len2 = WASM_VECTOR_LEN;
+        ptr3 = passStringToWasm0(public_key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        len3 = WASM_VECTOR_LEN;
     } catch (e) {
+        if (ptr3) { wasm.__wbindgen_free(ptr3, len3 * 1, 1); }
         if (ptr2) { wasm.__wbindgen_free(ptr2, len2 * 1, 1); }
         if (ptr1) { wasm.__wbindgen_free(ptr1, len1 * 1, 1); }
         if (ptr0) { wasm.__wbindgen_free(ptr0, len0 * 1, 1); }
         throw e;
     }
-    const ret = wasm.verifyCustodianSignature(ptr0, len0, ptr1, len1, val4, ptr2, len2);
+    const ret = wasm.verifyCustodianSignature(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }

@@ -131,10 +131,14 @@ export class CygnusVerifier {
         });
     }
 
-    /** `publicKey` is the custodian server's key at `height`, unpadded base64url. */
+    /**
+     * `height` is the custodian's signing height; `publicKey` is its key at
+     * that height, unpadded base64url. The wasm API takes the height as a
+     * decimal string because protocol heights are `u64`.
+     */
     verifyCustodianSignature(event, custodian, height, publicKey) {
         return this._run(() => {
-            wasm.verifyCustodianSignature(canonicalJson(event), custodian, height, publicKey);
+            wasm.verifyCustodianSignature(canonicalJson(event), custodian, String(height), publicKey);
             return {};
         });
     }

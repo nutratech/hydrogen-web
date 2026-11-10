@@ -37,10 +37,13 @@ export function verifyChain(links: string[]): string;
 /**
  * Verify a custodian (server) signature over an event at a chain height.
  *
+ * `height` is a decimal string, since protocol heights are `u64` and exceed
+ * what a JS number represents exactly.
+ *
  * # Errors
  * Throws if the signature entry is missing, malformed or invalid.
  */
-export function verifyCustodianSignature(event_json: string, custodian: string, height: number, public_key: string): void;
+export function verifyCustodianSignature(event_json: string, custodian: string, height: string, public_key: string): void;
 
 /**
  * Verify a device's signature over an event against its certified key.
@@ -58,7 +61,7 @@ export interface InitOutput {
     readonly eventId: (a: number, b: number) => [number, number, number, number];
     readonly parsePrincipal: (a: number, b: number) => [number, number, number, number];
     readonly verifyChain: (a: number, b: number) => [number, number, number, number];
-    readonly verifyCustodianSignature: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
+    readonly verifyCustodianSignature: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly verifyDeviceSignature: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

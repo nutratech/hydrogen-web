@@ -53,6 +53,14 @@ export function tests() {
             assert.equal(verifier.verifyDeviceSignature(CREATE_PDU, CREATE_PDU.sender, cert.device_id, cert.device_key).ok, true);
             assert.equal(verifier.verifyDeviceSignature(CREATE_PDU, CREATE_PDU.sender, cert.device_id, A0.slice(1, 44)).ok, false);
         },
+        "verifies a custodian signature at a height": async assert => {
+            const verifier = await loadedVerifier();
+            const server = "~soEUx9hiteZoLx9OwBJ94-GCuVrDksXROkIYuLn8Lb0";
+            const key = "7UkoxijRwsbq6QM4kFmVYSlZJzpcY_k2NsFGFKyHN9E";
+            assert.equal(verifier.verifyCustodianSignature(CREATE_PDU, server, 1, key).ok, true);
+            assert.equal(verifier.verifyCustodianSignature(CREATE_PDU, server, 0, key).ok, false);
+            assert.equal(verifier.verifyCustodianSignature(CREATE_PDU, server, 1, A0.slice(1, 44)).ok, false);
+        },
         "flags an event whose content does not match its ID": async assert => {
             const verifier = await loadedVerifier();
             const tampered = {...CREATE_PDU, origin_server_ts: CREATE_PDU.origin_server_ts + 1};
