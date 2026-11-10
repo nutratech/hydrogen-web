@@ -236,6 +236,11 @@ export class HomeServerApi {
         return this._post("/keys/signatures/upload", {}, payload, options);
     }
 
+    /** Publish cross-signing keys. 401 is allowed: the first call returns the UIA session and flows. */
+    uploadCrossSigningKeys(payload: Record<string, any>, options: BaseRequestOptions = {}): IHomeServerRequest {
+        return this._post("/keys/device_signing/upload", {}, payload, {...options, prefix: CS_V3_PREFIX, allowedStatusCodes: [401]});
+    }
+
     queryKeys(queryRequest: Record<string, any>, options?: BaseRequestOptions): IHomeServerRequest {
         return this._post("/keys/query", {}, queryRequest, options);
     }
