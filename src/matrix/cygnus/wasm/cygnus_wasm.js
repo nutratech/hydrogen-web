@@ -88,6 +88,32 @@ export function parsePrincipal(id) {
 }
 
 /**
+ * Return the active signature algorithm identifier used for event key IDs.
+ * @returns {string}
+ */
+export function signatureAlgorithm() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.signatureAlgorithm();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
+ * Return the encoded signature size in bytes for the active profile.
+ * @returns {number}
+ */
+export function signatureLength() {
+    const ret = wasm.signatureLength();
+    return ret >>> 0;
+}
+
+/**
  * Verify a link chain given as base64url links, genesis first, and return
  * the principal that the chain identifies.
  *
@@ -118,7 +144,8 @@ export function verifyChain(links) {
 }
 
 /**
- * Verify a custodian (server) signature over an event at a chain height.
+ * Verify a custodian (server) WOTS+ signature over an event at a chain
+ * height, using its certified 32-byte Merkle-root key.
  *
  * `height` is a decimal string, since protocol heights are `u64` and exceed
  * what a JS number represents exactly.
@@ -155,7 +182,8 @@ export function verifyCustodianSignature(event_json, custodian, height, public_k
 }
 
 /**
- * Verify a device's signature over an event against its certified key.
+ * Verify a device's WOTS+ signature over an event against its certified
+ * 32-byte Merkle-root key.
  *
  * # Errors
  * Throws if the signature entry is missing, malformed or invalid.

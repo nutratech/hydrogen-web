@@ -26,6 +26,16 @@ export function eventId(event_json: string): string;
 export function parsePrincipal(id: string): string;
 
 /**
+ * Return the active signature algorithm identifier used for event key IDs.
+ */
+export function signatureAlgorithm(): string;
+
+/**
+ * Return the encoded signature size in bytes for the active profile.
+ */
+export function signatureLength(): number;
+
+/**
  * Verify a link chain given as base64url links, genesis first, and return
  * the principal that the chain identifies.
  *
@@ -35,7 +45,8 @@ export function parsePrincipal(id: string): string;
 export function verifyChain(links: string[]): string;
 
 /**
- * Verify a custodian (server) signature over an event at a chain height.
+ * Verify a custodian (server) WOTS+ signature over an event at a chain
+ * height, using its certified 32-byte Merkle-root key.
  *
  * `height` is a decimal string, since protocol heights are `u64` and exceed
  * what a JS number represents exactly.
@@ -46,7 +57,8 @@ export function verifyChain(links: string[]): string;
 export function verifyCustodianSignature(event_json: string, custodian: string, height: string, public_key: string): void;
 
 /**
- * Verify a device's signature over an event against its certified key.
+ * Verify a device's WOTS+ signature over an event against its certified
+ * 32-byte Merkle-root key.
  *
  * # Errors
  * Throws if the signature entry is missing, malformed or invalid.
@@ -60,6 +72,8 @@ export interface InitOutput {
     readonly contentHash: (a: number, b: number) => [number, number, number, number];
     readonly eventId: (a: number, b: number) => [number, number, number, number];
     readonly parsePrincipal: (a: number, b: number) => [number, number, number, number];
+    readonly signatureAlgorithm: () => [number, number];
+    readonly signatureLength: () => number;
     readonly verifyChain: (a: number, b: number) => [number, number, number, number];
     readonly verifyCustodianSignature: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly verifyDeviceSignature: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
