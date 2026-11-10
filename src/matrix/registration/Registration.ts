@@ -43,7 +43,9 @@ export class Registration {
             this._accountDetails.password,
             this._accountDetails.initialDeviceDisplayName,
             undefined,
-            this._accountDetails.inhibitLogin).response();
+            this._accountDetails.inhibitLogin,
+            undefined,
+            this._accountDetails.deviceId).response();
         return this.parseStagesFromResponse(response);
     }
 
@@ -54,8 +56,8 @@ export class Registration {
      */
     async submitStage(stage: BaseRegistrationStage): Promise<BaseRegistrationStage | undefined> {
         const auth = stage.generateAuthenticationData();
-        const { username, password, initialDeviceDisplayName, inhibitLogin } = this._accountDetails;
-        const request = this._hsApi.register(username, password, initialDeviceDisplayName, auth, inhibitLogin);
+        const { username, password, initialDeviceDisplayName, inhibitLogin, deviceId } = this._accountDetails;
+        const request = this._hsApi.register(username, password, initialDeviceDisplayName, auth, inhibitLogin, undefined, deviceId);
         const response = await request.response();
         const status = await request.responseCode();
         const registrationResponse: RegistrationResponse = { ...response, status };
@@ -86,6 +88,9 @@ export class Registration {
     private async parseRegistrationResponse(response: RegistrationResponse, currentStage: BaseRegistrationStage) {
         switch (response.status) {
             case 200:
+                if (this._accountDetails.deviceId && response.device_id !== this._accountDetails.deviceId) {
+                    throw new Error(`homeserver assigned device ID ${response.device_id || "(none)"}; expected ${this._accountDetails.deviceId}`);
+                }
                 this._registerResponse = response;
                 return undefined;
             case 401:

@@ -128,13 +128,14 @@ export class Client {
         });
     }
 
-    async startRegistration(homeserver, username, password, initialDeviceDisplayName, flowSelector) {
+    async startRegistration(homeserver, username, password, initialDeviceDisplayName, flowSelector, deviceId) {
         const request = this._platform.request;
         const hsApi = new HomeServerApi({homeserver, request});
         const registration = new Registration(homeserver, hsApi, {
             username,
             password,
             initialDeviceDisplayName,
+            deviceId,
         },
         flowSelector);
         return registration;
@@ -198,6 +199,27 @@ export class Client {
             }
             await this._createSessionAfterAuth(sessionInfo, inspectAccountSetup, false, log);
         });
+    }
+
+    /** Authenticate to another homeserver while requesting this workspace's device ID. */
+    async loginWithDeviceId(loginMethod, deviceId, log) {
+        if (!loginMethod?.homeserver || !deviceId) {
+            throw new TypeError("a homeserver login method and existing device ID are required");
+        }
+        const hsApi = new HomeServerApi({homeserver: loginMethod.homeserver, request: this._platform.request});
+        const response = await loginMethod.login(hsApi, "Hydrogen", log, deviceId);
+        if (response.device_id !== deviceId) {
+            throw new Error(`homeserver assigned device ID ${response.device_id || "(none)"}; expected ${deviceId}`);
+        }
+        if (typeof response.user_id !== "string" || typeof response.access_token !== "string") {
+            throw new Error("homeserver login response is missing the user ID or access token");
+        }
+        return {
+            deviceId,
+            userId: response.user_id,
+            accessToken: response.access_token,
+            homeserver: loginMethod.homeserver,
+        };
     }
 
     async _createSessionAfterAuth({deviceId, userId, accessToken, homeserver}, inspectAccountSetup, isReadOnly, log) {

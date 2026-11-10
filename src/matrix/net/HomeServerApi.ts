@@ -170,7 +170,7 @@ export class HomeServerApi {
         return this._unauthedRequest("GET", this._url("/login"));
     }
 
-    register(username: string | null, password: string, initialDeviceDisplayName: string, auth?: Record<string, any>, inhibitLogin: boolean = false , options: BaseRequestOptions = {}): IHomeServerRequest {
+    register(username: string | null, password: string, initialDeviceDisplayName: string, auth?: Record<string, any>, inhibitLogin: boolean = false , options: BaseRequestOptions = {}, deviceId?: string): IHomeServerRequest {
         options.allowedStatusCodes = [401];
         const body: any = {
             auth,
@@ -182,11 +182,14 @@ export class HomeServerApi {
             // username is optional for registration
             body.username = username;
         }
+        if (deviceId) {
+            body.device_id = deviceId;
+        }
         return this._unauthedRequest( "POST", this._url("/register", CS_V3_PREFIX), undefined, body, options);
     }
 
-    passwordLogin(username: string, password: string, initialDeviceDisplayName: string, options?: BaseRequestOptions): IHomeServerRequest {
-        return this._unauthedRequest("POST", this._url("/login"), undefined, {
+    passwordLogin(username: string, password: string, initialDeviceDisplayName: string, options?: BaseRequestOptions, deviceId?: string): IHomeServerRequest {
+        const body: Record<string, any> = {
           "type": "m.login.password",
           "identifier": {
             "type": "m.id.user",
@@ -194,11 +197,13 @@ export class HomeServerApi {
           },
           "password": password,
           "initial_device_display_name": initialDeviceDisplayName
-        }, options);
+        };
+        if (deviceId) body.device_id = deviceId;
+        return this._unauthedRequest("POST", this._url("/login"), undefined, body, options);
     }
 
-    tokenLogin(loginToken: string, txnId: string, initialDeviceDisplayName: string, options?: BaseRequestOptions): IHomeServerRequest {
-        return this._unauthedRequest("POST", this._url("/login"), undefined, {
+    tokenLogin(loginToken: string, txnId: string, initialDeviceDisplayName: string, options?: BaseRequestOptions, deviceId?: string): IHomeServerRequest {
+        const body: Record<string, any> = {
           "type": "m.login.token",
           "identifier": {
             "type": "m.id.user",
@@ -206,7 +211,9 @@ export class HomeServerApi {
           "token": loginToken,
           "txn_id": txnId,
           "initial_device_display_name": initialDeviceDisplayName
-        }, options);
+        };
+        if (deviceId) body.device_id = deviceId;
+        return this._unauthedRequest("POST", this._url("/login"), undefined, body, options);
     }
 
     createFilter(userId: string, filter: Record<string, any>, options?: BaseRequestOptions): IHomeServerRequest {
