@@ -14,6 +14,13 @@ module.exports = {
         "no-prototype-builtins": "off",
         "no-unused-vars": "warn",
     },
+    overrides: [
+        {
+            // CommonJS config files run under Node
+            files: [".eslintrc.js", ".ts-eslintrc.js", "vite.*.js", "scripts/**/*.js"],
+            env: {node: true},
+        },
+    ],
     globals: {
         DEFINE_VERSION: "readonly",
         DEFINE_GLOBAL_HASH: "readonly",

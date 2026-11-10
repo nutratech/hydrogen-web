@@ -1,2 +1,6 @@
 # wasm-bindgen output, vendored from cygnus-core/cygnus-wasm/pkg
 src/matrix/cygnus/wasm/
+
+# build output and old experiments
+target/
+prototypes/
