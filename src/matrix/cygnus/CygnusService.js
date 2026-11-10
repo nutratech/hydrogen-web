@@ -123,9 +123,13 @@ export class CygnusService {
     }
 
     /** Move the principal to an authenticated destination server and rebind its rooms. */
-    async moveToCustodian({hsApi, custodian, displayUserId, roomIds = [], log}) {
+    async moveToCustodian({hsApi, deviceId, custodian, displayUserId, roomIds = [], log}) {
         const identity = this._requireIdentity();
         if (!hsApi) throw new Error("an authenticated destination homeserver API is required");
+        if (!deviceId) throw new Error("the authenticated destination device ID is required");
+        if (deviceId !== identity.deviceId) {
+            throw new Error("the destination device needs a Cygnus certificate before this move can continue");
+        }
         let pendingRooms = identity.pendingRebindRoomIds;
         if (!pendingRooms.length && !identity.pendingMove && identity.custodian === custodian && identity.displayUserId === displayUserId) {
             return;
@@ -141,9 +145,11 @@ export class CygnusService {
         } else if (identity.custodian !== custodian) {
             throw new Error("resume the pending Cygnus move with its destination custodian");
         }
+        identity.setHomeserverApi(hsApi);
+        this._hsApi = hsApi;
         const rooms = new CygnusRooms({identity, signer: this._signer(identity, hsApi)});
         for (const roomId of pendingRooms) {
-            await rooms.rebindRoom(roomId, {log});
+            await rooms.rebindRoom(roomId, {log, via: identity.pendingRebindVia});
             await identity.markRoomRebound(roomId);
         }
         this.identity.set(identity);

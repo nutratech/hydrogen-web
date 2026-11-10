@@ -165,9 +165,11 @@ function draftFor(crypto, identity, req, {prevEvents = ["$prev"], authEvents = [
  */
 function assistedApi(crypto, identity, {draft, extendTip = true} = {}) {
     const sent = [];
+    const drafts = [];
     let tip;
     const api = {
         cygnusEventDraft: body => {
+            drafts.push(body);
             const req = {roomId: body.room_id, type: body.type, stateKey: body.state_key, content: body.content};
             const prevEvents = extendTip && tip ? [tip] : ["$prev"];
             return request({event: draft ? draft(req, prevEvents) : draftFor(crypto, identity, req, {prevEvents})});
@@ -183,7 +185,7 @@ function assistedApi(crypto, identity, {draft, extendTip = true} = {}) {
             return request({event_id: tip});
         },
     };
-    return {api, sent};
+    return {api, sent, drafts};
 }
 
 export function tests() {
@@ -258,14 +260,14 @@ export function tests() {
             service._isSupported = true;
             service.identity.set(identity);
             const serverB = crypto.verifyChain([SERVER_B_GENESIS]).principal;
-            const {api: destination, sent} = assistedApi(crypto, identity);
+            const {api: destination, sent, drafts} = assistedApi(crypto, identity);
             const imports = [];
             let fail = true;
             destination.cygnusImportPrincipal = (links, revoked) => {
                 imports.push({links, revoked});
                 return request(fail ? new Error("offline") : {principal: USER_U, links});
             };
-            const move = {hsApi: destination, custodian: serverB, displayUserId: "@alice:second.example.net", roomIds: [ROOM_ID, ROOM_ID]};
+            const move = {hsApi: destination, deviceId: "HYDROGEN", custodian: serverB, displayUserId: "@alice:second.example.net", roomIds: [ROOM_ID, ROOM_ID]};
             await assert.rejects(service.moveToCustodian(move));
             // the signed move link holds the old rotation key, so rotating now would fork the chain
             await assert.rejects(identity.rotate());
@@ -284,7 +286,21 @@ export function tests() {
             assert.equal(sent.length, 1);
             assert.equal(sent[0].type, "m.room.member");
             assert.equal(sent[0].content.custodian, serverB);
+            assert.deepEqual(drafts[0].via, ["chat.example.org"]);
             assert.equal(identity.pendingRebindRoomIds.length, 0);
+            assert.equal(identity.pendingMove, undefined);
+        },
+        "a move refuses a destination device without a Cygnus certificate": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity([SELF_SIGNING, USR_ROT_2]);
+            const service = new CygnusService({storage, hsApi: {}, userId: "@alice:chat.example.org", deviceId: "HYDROGEN"});
+            service._crypto = crypto;
+            service._isSupported = true;
+            service.identity.set(identity);
+            const serverB = crypto.verifyChain([SERVER_B_GENESIS]).principal;
+            await assert.rejects(service.moveToCustodian({
+                hsApi: {}, deviceId: "NEW_DEVICE", custodian: serverB,
+                displayUserId: "@alice:second.example.net", roomIds: [ROOM_ID],
+            }), /needs a Cygnus certificate/);
             assert.equal(identity.pendingMove, undefined);
         },
         "join drafts carry via only when given": async assert => {

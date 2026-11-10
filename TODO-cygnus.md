@@ -20,8 +20,9 @@ Nothing has run against a real homeserver yet; `../congruent` will be the first.
       state sending.
 - [x] **Accepting or rejecting an invite uses `/join` and `/leave`**
       (`Invite.js`). The invite view needs to know the room is Cygnus (room
-      version from invite state) and sign the membership. Failed requests reset
-      the loading state so the action can be retried.
+      version from invite state), derive resident servers from its epoch events
+      for signed join drafts, and sign the membership. Failed requests reset the
+      loading state so the action can be retried.
 - [x] **Rejoining an archived room uses `/join`** (`ArchivedRoom.js`).
 - [x] **Group calls send state with `hsApi.sendState`** (`GroupCall.ts`). Hide
       calls in Cygnus rooms or route them through signed sends.
@@ -51,8 +52,14 @@ Nothing has run against a real homeserver yet; `../congruent` will be the first.
 - [ ] **Member panel.** Show each member's principal, custodian and chain
       height.
 - [ ] **Moving homeservers.** The API contract now covers `/principal/import`
-      for moves and same-custodian advancement, but there's no UI to move a
-      principal into a new custodian.
+      for moves and same-custodian advancement. Client plumbing sends the full
+      chain, persists/retries the move, and rebinds each room through the old
+      display ID's server; the local device floor remains keyed to the same
+      principal/device/room. The service refuses a destination with a different
+      device ID because it cannot yet certify that device or switch the whole
+      Hydrogen session (sync and regular Matrix APIs still use the source
+      session). Add a two-session handoff, destination-device certification,
+      then the UI.
 - [ ] **Recovery.** No UI to back up or restore the rotation key, and no warning
       before a cross-signing reset (which permanently breaks the principal — its
       master key is the cross-signing master key).

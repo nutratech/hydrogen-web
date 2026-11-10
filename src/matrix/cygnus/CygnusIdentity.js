@@ -22,6 +22,14 @@ function toBase64Url(value) {
     return value.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+function serverNameOf(userId) {
+    const separator = userId.indexOf(":");
+    if (separator < 2 || separator === userId.length - 1) {
+        throw new Error(`cannot determine a resident server from ${userId}`);
+    }
+    return userId.slice(separator + 1);
+}
+
 /**
  * The user's MSC00FC principal and the private material this device holds
  * for it.
@@ -111,6 +119,13 @@ export class CygnusIdentity {
     get hasPendingRotation() { return !!this._record.pendingRotation; }
     get pendingMove() { return this._record.pendingMove; }
     get pendingRebindRoomIds() { return this._record.pendingRebindRooms?.slice() || []; }
+    get pendingRebindVia() {
+        return (this._record.pendingRebindVia || this._record.pendingMove?.rebindVia || []).slice();
+    }
+
+    setHomeserverApi(hsApi) {
+        this._hsApi = hsApi;
+    }
 
     /** Remember a permanently revoked Matrix device ID for the next custodian import. */
     async revokeDevice(deviceId) {
@@ -177,9 +192,14 @@ export class CygnusIdentity {
 
     async prepareMove({custodian, displayUserId, roomIds}) {
         if (this._record.pendingMove) {
-            const pending = this._record.pendingMove;
+            let pending = this._record.pendingMove;
             if (pending.custodian !== custodian || pending.displayUserId !== displayUserId) {
                 throw new Error("another Cygnus move is already in progress");
+            }
+            if (!pending.rebindVia?.length) {
+                pending = {...pending, rebindVia: [serverNameOf(this.displayUserId)]};
+                this._record = {...this._record, pendingMove: pending};
+                await this._persist();
             }
             await this._ensureNextRotationKey(this._record.rotationSeed, pending.nextRotationSeed);
             return pending;
@@ -202,6 +222,7 @@ export class CygnusIdentity {
             nextRotationSeed,
             custodian,
             displayUserId,
+            rebindVia: [serverNameOf(this.displayUserId)],
             roomIds: [...new Set(roomIds)],
         };
         this._record = {...this._record, pendingMove};
@@ -226,14 +247,20 @@ export class CygnusIdentity {
             displayUserId: pending.displayUserId,
             rotationSeed: pending.nextRotationSeed,
             pendingRebindRooms: pending.roomIds,
+            pendingRebindVia: pending.rebindVia,
         };
-        if (hsApi) this._hsApi = hsApi;
+        if (hsApi) this.setHomeserverApi(hsApi);
         await this._persist();
     }
 
     async markRoomRebound(roomId) {
         const pendingRebindRooms = (this._record.pendingRebindRooms || []).filter(id => id !== roomId);
-        this._record = {...this._record, pendingRebindRooms};
+        const {pendingRebindVia, ...rest} = this._record;
+        this._record = {
+            ...rest,
+            pendingRebindRooms,
+            ...(pendingRebindRooms.length ? {pendingRebindVia} : {}),
+        };
         await this._persist();
     }
 
