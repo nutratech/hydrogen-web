@@ -30,6 +30,13 @@ export function tests() {
             const result = new CygnusVerifier().verifyChain([A0]);
             assert.equal(result.ok, false);
         },
+        "rejects a different wasm source on every instance": async assert => {
+            const verifier = await loadedVerifier();
+            const other = new Uint8Array([0, 97, 115, 109]);
+            await assert.rejects(verifier.load(other));
+            await assert.rejects(new CygnusVerifier().load(other));
+            await verifier.load(await wasmBinary());
+        },
         "verifies a server link chain": async assert => {
             const verifier = await loadedVerifier();
             const result = verifier.verifyChain([A0, A1]);

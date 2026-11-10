@@ -8,7 +8,11 @@ import anotherjson from "another-json";
 
 const wasmUrl = new URL("./wasm/cygnus_wasm_bg.wasm", import.meta.url);
 const loadTimeoutMs = 30000;
+// The source the module was (or is being) initialized from. It stays set
+// until the underlying init() settles, even after a load() timed out, because
+// that init cannot be cancelled and a second source must not race it.
 let initializedSource;
+// The in-flight underlying init(), shared by every verifier instance.
 let initializing;
 let wasmInitialized = false;
 
@@ -32,6 +36,29 @@ function sameSource(a, b) {
 }
 
 /**
+ * Start the underlying init() for `source`. Throws synchronously (leaving no
+ * state behind) when `source` cannot be turned into a request.
+ */
+function startInit(source) {
+    const controller = typeof AbortController === "function" ? new AbortController() : undefined;
+    const initSource = controller && (typeof source === "string" || source instanceof URL)
+        ? new Request(source, {signal: controller.signal})
+        : source;
+    initializedSource = source;
+    const promise = init({module_or_path: initSource}).then(() => {
+        wasmInitialized = true;
+    }, err => {
+        initializedSource = undefined;
+        throw err;
+    }).finally(() => {
+        initializing = undefined;
+    });
+    // Callers race this against their own timeout; keep the settled rejection handled.
+    promise.catch(() => {});
+    return {promise, abort: () => controller?.abort()};
+}
+
+/**
  * Verify-only access to `cygnus-core` (MSC00FC) compiled to WebAssembly.
  *
  * Every method returns `{ok: true, ...}` or `{ok: false, error}` instead of
@@ -52,41 +79,37 @@ export class CygnusVerifier {
      */
     load(source) {
         const requestedSource = source === undefined ? wasmUrl : source;
-        if (this._loaded || (wasmInitialized && sameSource(initializedSource, requestedSource))) {
+        if (initializedSource !== undefined && !sameSource(initializedSource, requestedSource)) {
+            return Promise.reject(new Error(wasmInitialized
+                ? "cygnus wasm is already initialized from a different source"
+                : "cygnus wasm is already initializing from a different source"));
+        }
+        if (wasmInitialized) {
             this._loaded = true;
             return Promise.resolve();
         }
         if (this._ready) return this._ready;
-        if (initializing && !sameSource(initializedSource, requestedSource)) {
-            return Promise.reject(new Error("cygnus wasm is already initializing from a different source"));
+        if (!initializing) {
+            try {
+                initializing = startInit(requestedSource);
+            } catch (err) {
+                return Promise.reject(err);
+            }
         }
-        if (initializedSource !== undefined && !sameSource(initializedSource, requestedSource)) {
-            return Promise.reject(new Error("cygnus wasm is already initialized from a different source"));
-        }
-        initializedSource = requestedSource;
-        initializing = true;
+        const {promise, abort} = initializing;
         let timeout;
-        const controller = typeof AbortController === "function" ? new AbortController() : undefined;
-        const initSource = controller && (typeof requestedSource === "string" || requestedSource instanceof URL)
-            ? new Request(requestedSource, {signal: controller.signal})
-            : requestedSource;
         const attempt = Promise.race([
-            init({module_or_path: initSource}),
+            promise,
             new Promise((_, reject) => {
                 timeout = setTimeout(() => {
-                    controller?.abort();
+                    abort();
                     reject(new Error("cygnus wasm initialization timed out"));
                 }, loadTimeoutMs);
             }),
         ]).then(() => {
-            wasmInitialized = true;
             this._loaded = true;
-        }).catch(err => {
-            if (initializedSource === requestedSource) initializedSource = undefined;
-            throw err;
         }).finally(() => {
             clearTimeout(timeout);
-            initializing = false;
             if (this._ready === attempt) this._ready = undefined;
         });
         this._ready = attempt;
