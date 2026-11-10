@@ -5,9 +5,13 @@ Please see LICENSE files in the repository root for full details.
 
 import {CygnusCrypto} from "./CygnusCrypto.js";
 import {CygnusIdentity, IDENTITY_SESSION_KEY} from "./CygnusIdentity.js";
-import {CygnusEventSigner, checkDraft, FLOORS_SESSION_KEY} from "./CygnusEventSigner.js";
+import {CygnusEventSigner, checkDraft, FLOORS_SESSION_KEY, signedEventKey} from "./CygnusEventSigner.js";
+import {ConnectionError, HomeServerError} from "../error.js";
 import {CygnusRooms} from "./CygnusRooms.js";
 import {CYGNUS_ROOM_VERSION} from "./constants.js";
+import anotherjson from "another-json";
+
+const anotherJson = value => anotherjson.stringify(value);
 
 // MSC00FC Appendix A (pid_vectors.json): Alice's master and rotation seeds,
 // her genesis link minted by server A, and server A's chain (pid_pdu_vectors.json event 0).
@@ -46,6 +50,7 @@ function memoryStorage() {
         session: {
             get: async key => values.get(key),
             set: (key, value) => values.set(key, JSON.parse(JSON.stringify(value))),
+            remove: key => values.delete(key),
         },
         complete: async () => {},
         abort: () => {},
@@ -225,6 +230,58 @@ export function tests() {
             // the next draft omits the floor from prev_events, so it must be refused
             await assert.rejects(signer.send({roomId: ROOM_ID, type: "m.room.message", content}));
             assert.equal(sent.length, 1);
+        },
+        "a retry after a lost response resends the same signed event": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity();
+            const {api, sent} = assistedApi(crypto, identity);
+            let drafts = 0;
+            const draft = api.cygnusEventDraft;
+            api.cygnusEventDraft = body => { drafts += 1; return draft(body); };
+            const sendSigned = api.cygnusSendSigned;
+            const txnIds = [];
+            let lose = true;
+            api.cygnusSendSigned = (txnId, event) => {
+                txnIds.push(txnId);
+                const result = sendSigned(txnId, event);
+                if (lose) {
+                    lose = false;
+                    // the homeserver accepted it, but the response never arrived
+                    return request(new ConnectionError("lost"));
+                }
+                return result;
+            };
+            const signer = new CygnusEventSigner({identity, crypto, hsApi: api, storage, createTxnId: () => "unused"});
+            const req = {roomId: ROOM_ID, type: "m.room.message", content: {msgtype: "m.text", body: "once"}};
+            await assert.rejects(signer.send(req, {txnId: "pending-1"}));
+            assert(storage.values.has(signedEventKey("pending-1")));
+            const {eventId} = await signer.send(req, {txnId: "pending-1"});
+            assert.equal(drafts, 1);
+            assert.deepEqual(txnIds, ["pending-1", "pending-1"]);
+            assert.equal(anotherJson(sent[0]), anotherJson(sent[1]));
+            assert.equal(eventId, crypto.eventId(sent[0]).eventId);
+            assert.equal(storage.values.has(signedEventKey("pending-1")), false);
+        },
+        "a definite rejection drops the signed event so the retry drafts afresh": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity();
+            const {api} = assistedApi(crypto, identity);
+            let drafts = 0;
+            const draft = api.cygnusEventDraft;
+            api.cygnusEventDraft = body => { drafts += 1; return draft(body); };
+            const sendSigned = api.cygnusSendSigned;
+            let reject = true;
+            api.cygnusSendSigned = (txnId, event) => {
+                if (reject) {
+                    reject = false;
+                    return request(new HomeServerError("PUT", "/send_signed", {errcode: "M_FORBIDDEN"}, 403));
+                }
+                return sendSigned(txnId, event);
+            };
+            const signer = new CygnusEventSigner({identity, crypto, hsApi: api, storage, createTxnId: () => "unused"});
+            const req = {roomId: ROOM_ID, type: "m.room.message", content: {msgtype: "m.text", body: "again"}};
+            await assert.rejects(signer.send(req, {txnId: "pending-2"}));
+            assert.equal(storage.values.has(signedEventKey("pending-2")), false);
+            await signer.send(req, {txnId: "pending-2"});
+            assert.equal(drafts, 2);
         },
         "rejects drafts that differ from the request": async assert => {
             const {identity, crypto} = await aliceIdentity();

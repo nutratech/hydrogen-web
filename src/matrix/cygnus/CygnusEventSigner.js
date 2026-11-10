@@ -4,9 +4,15 @@ Please see LICENSE files in the repository root for full details.
 */
 
 import anotherjson from "another-json";
+import {HomeServerError} from "../error.js";
 
 /** Session-store key for the per-room device floors (§9). */
 export const FLOORS_SESSION_KEY = "cygnus.deviceFloors";
+
+/** Session-store key for a signed event not yet confirmed by `send_signed`. */
+export function signedEventKey(txnId) {
+    return `cygnus.signed.${txnId}`;
+}
 
 const SERVER_CHOSEN_FIELDS = ["origin_server_ts", "depth", "prev_events", "auth_events", "hashes"];
 const FORBIDDEN_DRAFT_FIELDS = ["event_id", "signatures", "unsigned"];
@@ -113,6 +119,12 @@ function checkCreateContent(content, requested, {identity, crypto}) {
  * It keeps the device floor per room: the last event `send_signed` confirmed.
  * Every later draft for that room must list it in `prev_events`, and the floor
  * moves only after a confirmation.
+ *
+ * A signed event is stored under its transaction ID before it is submitted.
+ * A retry with the same transaction ID resends that exact event, which §9
+ * makes idempotent, so a lost response cannot produce a second, differently
+ * signed event. Only a definite rejection from the homeserver drops it, and
+ * the next attempt drafts afresh.
  */
 export class CygnusEventSigner {
     constructor({identity, crypto, hsApi, storage, createTxnId}) {
@@ -125,12 +137,41 @@ export class CygnusEventSigner {
 
     /**
      * @param {{roomId?: string, type: string, stateKey?: string, content: object}} request
+     * @param {{txnId?: string, log?: object}} [options] pass the caller's transaction ID
+     *     (e.g. a pending event's) so retries and remote echoes line up
      * @returns {Promise<{eventId: string, event: object}>} the submitted event and its ID
      */
-    async send(request, {log} = {}) {
-        const txnId = this._createTxnId();
+    async send(request, {log, txnId = this._createTxnId()} = {}) {
+        let signed = await this._get(signedEventKey(txnId));
+        if (!signed) {
+            signed = await this._draftAndSign(request, txnId, log);
+            await this._put(signedEventKey(txnId), signed);
+        }
+        const computed = this._crypto.eventId(signed);
+        if (!computed.ok) {
+            throw new Error(`cannot compute the event ID: ${computed.error}`);
+        }
+        let response;
+        try {
+            response = await this._hsApi.cygnusSendSigned(txnId, signed, {log}).response();
+        } catch (err) {
+            if (err instanceof HomeServerError) {
+                await this._put(signedEventKey(txnId), undefined);
+            }
+            throw err;
+        }
+        if (response.event_id !== computed.eventId) {
+            throw new Error(`homeserver confirmed ${response.event_id}, but the signed event is ${computed.eventId}`);
+        }
+        // `m.room.create` has no room yet; its event ID determines the room ID (§5.6).
+        const floorRoomId = request.roomId ?? `!${computed.eventId.slice(1)}`;
+        await this._confirm(txnId, floorRoomId, computed.eventId);
+        return {eventId: computed.eventId, event: signed};
+    }
+
+    async _draftAndSign(request, txnId, log) {
         const roomId = request.roomId;
-        const floor = roomId ? await this._floor(roomId) : undefined;
+        const floor = roomId ? (await this._get(FLOORS_SESSION_KEY))?.[roomId] : undefined;
         const body = {
             type: request.type,
             content: request.content,
@@ -148,32 +189,37 @@ export class CygnusEventSigner {
         if (error) {
             throw new Error(`refusing to sign the homeserver's draft: ${error}`);
         }
-        const signed = this._identity.signEvent(draft);
-        const computed = this._crypto.eventId(signed);
-        if (!computed.ok) {
-            throw new Error(`cannot compute the event ID: ${computed.error}`);
-        }
-        const response = await this._hsApi.cygnusSendSigned(txnId, signed, {log}).response();
-        if (response.event_id !== computed.eventId) {
-            throw new Error(`homeserver confirmed ${response.event_id}, but the signed event is ${computed.eventId}`);
-        }
-        // `m.room.create` has no room yet; its event ID determines the room ID (§5.6).
-        const floorRoomId = roomId ?? `!${computed.eventId.slice(1)}`;
-        await this._setFloor(floorRoomId, computed.eventId);
-        return {eventId: computed.eventId, event: signed};
+        return this._identity.signEvent(draft);
     }
 
-    async _floor(roomId) {
+    async _get(key) {
         const txn = await this._storage.readTxn([this._storage.storeNames.session]);
-        const floors = await txn.session.get(FLOORS_SESSION_KEY);
-        return floors?.[roomId];
+        return txn.session.get(key);
     }
 
-    async _setFloor(roomId, eventId) {
+    /** Store `value` under `key`, or remove the key when `value` is undefined. */
+    async _put(key, value) {
+        const txn = await this._storage.readWriteTxn([this._storage.storeNames.session]);
+        try {
+            if (value === undefined) {
+                txn.session.remove(key);
+            } else {
+                txn.session.set(key, value);
+            }
+        } catch (err) {
+            txn.abort();
+            throw err;
+        }
+        await txn.complete();
+    }
+
+    /** Advance the room's floor and drop the stored signed event, in one transaction. */
+    async _confirm(txnId, roomId, eventId) {
         const txn = await this._storage.readWriteTxn([this._storage.storeNames.session]);
         try {
             const floors = await txn.session.get(FLOORS_SESSION_KEY) ?? {};
             txn.session.set(FLOORS_SESSION_KEY, {...floors, [roomId]: eventId});
+            txn.session.remove(signedEventKey(txnId));
         } catch (err) {
             txn.abort();
             throw err;

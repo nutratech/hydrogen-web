@@ -107,10 +107,14 @@ export class CygnusService {
         return this._rooms().joinRoom(roomId, {log});
     }
 
-    /** Send a non-state event (message, reaction, redaction…) in a Cygnus room; returns its event ID. */
-    async sendRoomEvent(roomId, type, content, log) {
+    /**
+     * Send a non-state event (message, reaction, redaction…) in a Cygnus room; returns its event ID.
+     * `txnId` should be the pending event's, so a retry resends the same signed event and the
+     * remote echo clears the local one.
+     */
+    async sendRoomEvent(roomId, type, content, txnId, log) {
         const identity = this._requireIdentity();
-        const {eventId} = await this._signer(identity).send({roomId, type, content}, {log});
+        const {eventId} = await this._signer(identity).send({roomId, type, content}, {txnId, log});
         return eventId;
     }
 

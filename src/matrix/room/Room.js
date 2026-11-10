@@ -46,7 +46,7 @@ export class Room extends BaseRoom {
                 if (!this.isCygnus || !cygnus) {
                     return undefined;
                 }
-                return (type, content, log) => cygnus.sendRoomEvent(this.id, type, content, log);
+                return (type, content, txnId, log) => cygnus.sendRoomEvent(this.id, type, content, txnId, log);
             },
         });
     }

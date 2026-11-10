@@ -197,7 +197,7 @@ export class PendingEvent {
     }
 
     /**
-     * @param {Function} [sendSigned] `(eventType, content, log) => Promise<eventId>`, set for
+     * @param {Function} [sendSigned] `(eventType, content, txnId, log) => Promise<eventId>`, set for
      *     MSC00FC rooms where the device signs every event instead of calling `/send`.
      */
     async send(hsApi, log, sendSigned) {
@@ -210,7 +210,7 @@ export class PendingEvent {
             const signedContent = eventType === REDACTION_TYPE
                 ? {...content, redacts: this._data.relatedEventId}
                 : content;
-            const eventId = await sendSigned(eventType, signedContent, log);
+            const eventId = await sendSigned(eventType, signedContent, this.txnId, log);
             this._data.remoteId = eventId;
             this._deferred.resolve(eventId);
             log.set("id", eventId);
