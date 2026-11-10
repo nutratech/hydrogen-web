@@ -48,13 +48,13 @@ export class JoinRoomViewModel extends ViewModel<SegmentType, Options> {
 
     get closeUrl(): string { return this._closeUrl; }
 
-    async join(roomId: string): Promise<void> {
+    async join(roomId: string, via: string[] = []): Promise<void> {
         this._error = undefined;
         this._joinInProgress = true;
         this.emitChange("joinInProgress");
         try {
             const id = this.withCygnus
-                ? await this._joinWithCygnus(roomId)
+                ? await this._joinWithCygnus(roomId, via)
                 : await joinRoom(roomId, this._session);
             this.navigation.push("room", id);
         }
@@ -65,12 +65,12 @@ export class JoinRoomViewModel extends ViewModel<SegmentType, Options> {
         }
     }
 
-    private _joinWithCygnus(roomId: string): Promise<string> {
+    private _joinWithCygnus(roomId: string, via: string[]): Promise<string> {
         // Device-signed events cite a room ID; aliases would need resolving first.
         if (!roomId.startsWith("!")) {
             throw new Error("Joining with a portable identity needs a room ID (!…), not an alias.");
         }
-        return this.logger.run("cygnus join room", log => this._session.cygnus.joinRoom(roomId, log));
+        return this.logger.run("cygnus join room", log => this._session.cygnus.joinRoom(roomId, log, via));
     }
 
     get joinInProgress(): boolean {
@@ -84,5 +84,6 @@ export class JoinRoomViewModel extends ViewModel<SegmentType, Options> {
         else if(this._joinInProgress){
             return "Joining room";
         }
+        return undefined;
     }
 }

@@ -19,13 +19,20 @@ export class JoinRoomView extends TemplateView<JoinRoomViewModel> {
             placeholder: vm.i18n`Enter a room id or alias`,
             disabled: vm => vm.joinInProgress,
         });
+        const viaInput = t.input({
+            type: "text",
+            name: "via",
+            id: "via",
+            placeholder: vm.i18n`server1.example.org, server2.example.org`,
+            disabled: vm => vm.joinInProgress,
+        });
         return t.main({className: "JoinRoomView middle"}, [
             t.div({className: "JoinRoomView_header middle-header"}, [
                 t.a({className: "button-utility close-middle", href: vm.closeUrl, title: vm.i18n`Cancel room join`}),
                 t.h2("Join room"),
             ]),
             t.div({className: "JoinRoomView_body centered-column"}, [
-                t.form({className: "JoinRoomView_detailsForm form", onSubmit: evt => this.onSubmit(evt,  input.value)}, [
+                t.form({className: "JoinRoomView_detailsForm form", onSubmit: evt => this.onSubmit(evt, input.value, viaInput.value)}, [
                     t.div({className: "vertical-layout"}, [
                         t.div({className: "stretch form-row text"}, [
                             t.label({for: "id"}, vm.i18n`Room id`),
@@ -38,6 +45,10 @@ export class JoinRoomView extends TemplateView<JoinRoomViewModel> {
                                 onChange: evt => vm.setWithCygnus(evt.target.checked),
                             }),
                             t.label({for: "withCygnus"}, vm.i18n`Join with my portable identity (Cygnus room)`),
+                        ]),
+                        t.div({className: {"form-row text": true, hidden: vm => !vm.withCygnus}}, [
+                            t.label({for: "via"}, vm.i18n`Resident server(s), if needed`),
+                            viaInput,
                         ]),
                     ]),
                     t.div({className: "button-row"}, [
@@ -58,8 +69,8 @@ export class JoinRoomView extends TemplateView<JoinRoomViewModel> {
         ]);
     }
 
-    onSubmit(evt, id) {
+    onSubmit(evt, id, via) {
         evt.preventDefault();
-        this.value.join(id);
+        this.value.join(id, via.split(/[\s,]+/).filter(Boolean));
     }
 }

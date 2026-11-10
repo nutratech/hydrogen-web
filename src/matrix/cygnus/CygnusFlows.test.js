@@ -8,6 +8,7 @@ import {CygnusIdentity, IDENTITY_SESSION_KEY} from "./CygnusIdentity.js";
 import {CygnusEventSigner, checkDraft, FLOORS_SESSION_KEY, signedEventKey} from "./CygnusEventSigner.js";
 import {ConnectionError, HomeServerError} from "../error.js";
 import {CygnusRooms} from "./CygnusRooms.js";
+import {CygnusService} from "./CygnusService.js";
 import {CYGNUS_ROOM_VERSION} from "./constants.js";
 import anotherjson from "another-json";
 
@@ -217,6 +218,54 @@ export function tests() {
             assert.equal(sent[0], sent[1]);
             assert.equal(identity.height, 1);
             assert.equal(identity.hasPendingRotation, false);
+        },
+        "a move imports the full chain, survives a lost response and rebinds rooms": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity([SELF_SIGNING, USR_ROT_2]);
+            const service = new CygnusService({storage, hsApi: {}, userId: "@alice:chat.example.org", deviceId: "HYDROGEN"});
+            service._crypto = crypto;
+            service._isSupported = true;
+            service.identity.set(identity);
+            const serverB = crypto.verifyChain([SERVER_B_GENESIS]).principal;
+            const {api: destination, sent} = assistedApi(crypto, identity);
+            const imports = [];
+            let fail = true;
+            destination.cygnusImportPrincipal = (links, revoked) => {
+                imports.push({links, revoked});
+                return request(fail ? new Error("offline") : {principal: USER_U, links});
+            };
+            const move = {hsApi: destination, custodian: serverB, displayUserId: "@alice:second.example.net", roomIds: [ROOM_ID, ROOM_ID]};
+            await assert.rejects(service.moveToCustodian(move));
+            // the signed move link holds the old rotation key, so rotating now would fork the chain
+            await assert.rejects(identity.rotate());
+            fail = false;
+            await service.moveToCustodian(move);
+            assert.equal(imports.length, 2);
+            assert.equal(imports[0].links.length, 2);
+            assert.equal(imports[0].links[0], U0);
+            assert.equal(imports[0].links[1], imports[1].links[1]);
+            assert.equal(identity.custodian, serverB);
+            assert.equal(identity.displayUserId, "@alice:second.example.net");
+            assert.equal(identity.height, 1);
+            assert.equal(crypto.parseLink(identity.links[1]).custodian, serverB);
+            assert.equal(storage.values.get(IDENTITY_SESSION_KEY).rotationSeed, USR_ROT_2);
+            // one device-signed rebinding join per room, naming the new custodian
+            assert.equal(sent.length, 1);
+            assert.equal(sent[0].type, "m.room.member");
+            assert.equal(sent[0].content.custodian, serverB);
+            assert.equal(identity.pendingRebindRoomIds.length, 0);
+            assert.equal(identity.pendingMove, undefined);
+        },
+        "join drafts carry via only when given": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity();
+            const {api} = assistedApi(crypto, identity);
+            const bodies = [];
+            const draft = api.cygnusEventDraft;
+            api.cygnusEventDraft = body => { bodies.push(body); return draft(body); };
+            const rooms = new CygnusRooms({identity, signer: new CygnusEventSigner({identity, crypto, hsApi: api, storage, createTxnId: () => `t${bodies.length}`})});
+            await rooms.joinRoom(ROOM_ID, {via: ["second.example.net"]});
+            await rooms.joinRoom("!other", {});
+            assert.deepEqual(bodies[0].via, ["second.example.net"]);
+            assert.equal("via" in bodies[1], false);
         },
         "signs and submits an assisted-mode draft, then holds the device floor": async assert => {
             const {identity, crypto, storage} = await aliceIdentity();

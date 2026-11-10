@@ -136,7 +136,7 @@ export class CygnusEventSigner {
     }
 
     /**
-     * @param {{roomId?: string, type: string, stateKey?: string, content: object}} request
+     * @param {{roomId?: string, type: string, stateKey?: string, content: object, via?: string[]}} request
      * @param {{txnId?: string, log?: object}} [options] pass the caller's transaction ID
      *     (e.g. a pending event's) so retries and remote echoes line up
      * @returns {Promise<{eventId: string, event: object}>} the submitted event and its ID
@@ -183,6 +183,9 @@ export class CygnusEventSigner {
         }
         if (request.stateKey !== undefined) {
             body.state_key = request.stateKey;
+        }
+        if (request.via?.length) {
+            body.via = request.via;
         }
         const {event: draft} = await this._hsApi.cygnusEventDraft(body, {log}).response();
         const error = checkDraft(draft, request, {identity: this._identity, crypto: this._crypto, floor});

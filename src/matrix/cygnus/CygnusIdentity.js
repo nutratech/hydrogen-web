@@ -89,11 +89,14 @@ export class CygnusIdentity {
     get masterKey() { return this._record.masterKey; }
     get deviceId() { return this._record.deviceId; }
     get deviceCertificate() { return this._record.deviceCertificate; }
+    get revokedDeviceIds() { return this._record.revokedDeviceIds.slice(); }
     get links() { return this._record.links.slice(); }
     /** Height of the tip link; genesis is 0. */
     get height() { return this._record.links.length - 1; }
     /** True when a rotation was signed but the custodian has not confirmed it. */
     get hasPendingRotation() { return !!this._record.pendingRotation; }
+    get pendingMove() { return this._record.pendingMove; }
+    get pendingRebindRoomIds() { return this._record.pendingRebindRooms?.slice() || []; }
 
     /** Device-sign an event that already carries this identity's certificate. */
     signEvent(event) {
@@ -112,6 +115,11 @@ export class CygnusIdentity {
      * chain.
      */
     async rotate({log} = {}) {
+        // A pending move has already signed the next link with the current
+        // rotation key; a second link at that height would be a burn (§4.2).
+        if (this._record.pendingMove) {
+            throw new Error("finish the pending Cygnus move before rotating keys");
+        }
         if (!this._record.pendingRotation) {
             const nextRotationSeed = this._crypto.generateSeed();
             const link = this._crypto.userSuccessor(
@@ -126,9 +134,7 @@ export class CygnusIdentity {
             await this._persist();
         }
         const {link, nextRotationSeed} = this._record.pendingRotation;
-        // Spec gap: §7 defines `principal/import` for moves; it is the only
-        // client endpoint that takes user-signed links, so a same-custodian
-        // advancement goes through it too.
+        // §9 defines import for both same-custodian advancement and moves.
         await this._hsApi.cygnusImportPrincipal([link], this._record.revokedDeviceIds, {log}).response();
         const links = [...this._record.links, link];
         const verified = this._crypto.verifyChain(links);
@@ -137,6 +143,65 @@ export class CygnusIdentity {
         }
         const {pendingRotation, ...rest} = this._record; // eslint-disable-line no-unused-vars
         this._record = {...rest, links, rotationSeed: nextRotationSeed};
+        await this._persist();
+    }
+
+    async prepareMove({custodian, displayUserId, roomIds}) {
+        if (this._record.pendingMove) {
+            const pending = this._record.pendingMove;
+            if (pending.custodian !== custodian || pending.displayUserId !== displayUserId) {
+                throw new Error("another Cygnus move is already in progress");
+            }
+            return pending;
+        }
+        if (this._record.pendingRotation) {
+            throw new Error("finish the pending Cygnus rotation before moving homeservers");
+        }
+        const nextRotationSeed = this._crypto.generateSeed();
+        const link = this._crypto.userSuccessor(
+            this._record.links[this._record.links.length - 1],
+            this._record.rotationSeed,
+            nextRotationSeed,
+            custodian,
+            this.masterKey,
+            displayUserId,
+        );
+        const pendingMove = {
+            link,
+            nextRotationSeed,
+            custodian,
+            displayUserId,
+            roomIds: [...new Set(roomIds)],
+        };
+        this._record = {...this._record, pendingMove};
+        await this._persist();
+        return pendingMove;
+    }
+
+    async completeMove(links, principal, hsApi) {
+        const pending = this._record.pendingMove;
+        if (!pending) throw new Error("no Cygnus move is in progress");
+        if (!Array.isArray(links) || !links.length) throw new Error("destination homeserver returned no principal chain");
+        const verified = this._crypto.verifyChain(links);
+        if (!verified.ok || verified.principal !== this.principal || (principal && principal !== this.principal) || links[links.length - 1] !== pending.link) {
+            throw new Error(`imported chain does not match this move: ${verified.error ?? verified.principal}`);
+        }
+        const {pendingMove, ...rest} = this._record; // eslint-disable-line no-unused-vars
+        this._record = {
+            ...rest,
+            links,
+            custodian: pending.custodian,
+            displayUserId: pending.displayUserId,
+            rotationSeed: pending.nextRotationSeed,
+            pendingRebindRooms: pending.roomIds,
+        };
+        if (hsApi) this._hsApi = hsApi;
+        await this._persist();
+    }
+
+    async markRoomRebound(roomId) {
+        const pendingRebindRooms = (this._record.pendingRebindRooms || []).filter(id => id !== roomId);
+        this._record = {...this._record, pendingRebindRooms};
         await this._persist();
     }
 

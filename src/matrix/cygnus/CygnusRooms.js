@@ -8,11 +8,10 @@ import {CYGNUS_ROOM_VERSION} from "./constants.js";
 /**
  * Room lifecycle for MSC00FC rooms, as the user-signed events a device sends.
  *
- * The epoch events between them (`m.room.user_epoch` and
- * `m.room.server_epoch` introductions and advancements) carry no device
- * signature (§5.2.1), so the custodian sends them. This class assumes the
- * custodian does that when it accepts a create or a join; the spec gives no
- * client endpoint to request them.
+ * The epoch events (`m.room.user_epoch` and `m.room.server_epoch`) carry no
+ * device signature (§5.2.1). The §9 contract requires the custodian to emit
+ * them after create and to prepare them for joins before the client signs the
+ * membership event.
  */
 export class CygnusRooms {
     constructor({identity, signer}) {
@@ -53,13 +52,16 @@ export class CygnusRooms {
 
     /**
      * Join an existing Cygnus room with a device-signed membership event.
-     * Spec gap: §7 has the joining server send the epoch introductions through
-     * make_join/send_join, but no client-server call starts that for a room
-     * the user is not in yet; this relies on `event_draft` doing so.
+     * `via` names resident servers when the custodian is not yet in the room.
      */
-    async joinRoom(roomId, {log} = {}) {
-        await this._join(roomId, log);
+    async joinRoom(roomId, {log, via} = {}) {
+        await this._join(roomId, log, via);
         return roomId;
+    }
+
+    async rebindRoom(roomId, {log} = {}) {
+        const txnId = `cygnus-rebind-${this._identity.height}-${roomId}`;
+        return this._join(roomId, log, undefined, txnId);
     }
 
     leaveRoom(roomId, {log} = {}) {
@@ -71,12 +73,13 @@ export class CygnusRooms {
         }, {log});
     }
 
-    async _join(roomId, log) {
+    async _join(roomId, log, via, txnId) {
         return this._signer.send({
             roomId,
             type: "m.room.member",
             stateKey: this._identity.principal,
             content: {membership: "join", custodian: this._identity.custodian},
-        }, {log});
+            via,
+        }, {log, txnId});
     }
 }

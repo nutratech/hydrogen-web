@@ -78,11 +78,10 @@ Nothing has run against a real homeserver yet; `../congruent` will be the first.
 - [ ] **Device floors per room and device.** Hydrogen currently keys floors by
       room only; the proposal requires `(user, device_id, room)`. In Cygnus
       rooms, key the user component by principal.
-- [ ] **Client-side API contract work.** Send `via` when drafting a join to a
-      room the homeserver has no joined user in; send the full chain when moving
-      to a new custodian; after import, draft and send a device-signed rebinding
-      join in each room; and replace the "spec gap" comments in `CygnusRooms`
-      and `CygnusIdentity` with references to the §9 contract.
+- [x] **Client-side API contract plumbing.** Join drafts now pass `via`; the
+      move service sends the full chain and resumes device-signed rebinding
+      joins after import; `CygnusRooms` and `CygnusIdentity` refer to the §9
+      contract. The user-facing move flow is still missing above.
 
 ## Spec decisions recorded; homeserver implementation pending
 

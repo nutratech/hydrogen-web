@@ -103,12 +103,39 @@ export class CygnusService {
         return this._rooms().createRoom({...options, log});
     }
 
-    joinRoom(roomId, log) {
-        return this._rooms().joinRoom(roomId, {log});
+    joinRoom(roomId, log, via) {
+        return this._rooms().joinRoom(roomId, {log, via});
     }
 
     leaveRoom(roomId, log) {
         return this._rooms().leaveRoom(roomId, {log});
+    }
+
+    /** Move the principal to an authenticated destination server and rebind its rooms. */
+    async moveToCustodian({hsApi, custodian, displayUserId, roomIds = [], log}) {
+        const identity = this._requireIdentity();
+        if (!hsApi) throw new Error("an authenticated destination homeserver API is required");
+        let pendingRooms = identity.pendingRebindRoomIds;
+        if (!pendingRooms.length && !identity.pendingMove && identity.custodian === custodian && identity.displayUserId === displayUserId) {
+            return;
+        }
+        if (!pendingRooms.length) {
+            const pendingMove = await identity.prepareMove({custodian, displayUserId, roomIds});
+            const links = [...identity.links, pendingMove.link];
+            const response = await hsApi.cygnusImportPrincipal(links, identity.revokedDeviceIds, {log}).response();
+            await identity.completeMove(response.links, response.principal, hsApi);
+            this._hsApi = hsApi;
+            pendingRooms = identity.pendingRebindRoomIds;
+            this.identity.set(identity);
+        } else if (identity.custodian !== custodian) {
+            throw new Error("resume the pending Cygnus move with its destination custodian");
+        }
+        const rooms = new CygnusRooms({identity, signer: this._signer(identity, hsApi)});
+        for (const roomId of pendingRooms) {
+            await rooms.rebindRoom(roomId, {log});
+            await identity.markRoomRebound(roomId);
+        }
+        this.identity.set(identity);
     }
 
     /**
@@ -138,11 +165,11 @@ export class CygnusService {
         return new CygnusRooms({identity, signer: this._signer(identity)});
     }
 
-    _signer(identity) {
+    _signer(identity, hsApi = this._hsApi) {
         return new CygnusEventSigner({
             identity,
             crypto: this._crypto,
-            hsApi: this._hsApi,
+            hsApi,
             storage: this._storage,
             createTxnId: () => `cygnus-${Date.now()}-${this._crypto.generateSeed().slice(0, 8)}`,
         });
