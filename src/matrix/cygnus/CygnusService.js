@@ -99,6 +99,17 @@ export class CygnusService {
         this.identity.set(identity);
     }
 
+    /** Permanently revoke another Matrix device and publish the list with a chain advancement. */
+    async revokeDevice(deviceId, log) {
+        const identity = this._requireIdentity();
+        if (deviceId === identity.deviceId) {
+            throw new Error("another active Cygnus signer must revoke this device");
+        }
+        await identity.revokeDevice(deviceId);
+        await identity.rotate({log});
+        this.identity.set(identity);
+    }
+
     createRoom(options, log) {
         return this._rooms().createRoom({...options, log});
     }
@@ -191,6 +202,6 @@ export class CygnusService {
     }
 
     _deps() {
-        return {storage: this._storage, hsApi: this._hsApi, crypto: this._crypto};
+        return {storage: this._storage, hsApi: this._hsApi, crypto: this._crypto, secretFetcher: this._secretFetcher};
     }
 }

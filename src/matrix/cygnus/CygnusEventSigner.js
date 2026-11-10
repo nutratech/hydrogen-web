@@ -14,6 +14,10 @@ export function signedEventKey(txnId) {
     return `cygnus.signed.${txnId}`;
 }
 
+function floorKey(identity, roomId) {
+    return JSON.stringify([identity.principal, identity.deviceId, roomId]);
+}
+
 const SERVER_CHOSEN_FIELDS = ["origin_server_ts", "depth", "prev_events", "auth_events", "hashes"];
 const FORBIDDEN_DRAFT_FIELDS = ["event_id", "signatures", "unsigned"];
 
@@ -116,7 +120,7 @@ function checkCreateContent(content, requested, {identity, crypto}) {
  * mode: the homeserver proposes the envelope, and this class checks it, signs
  * it with the Cygnus device key and submits it through `send_signed`.
  *
- * It keeps the device floor per room: the last event `send_signed` confirmed.
+ * It keeps the device floor per principal, device and room: the last event `send_signed` confirmed.
  * Every later draft for that room must list it in `prev_events`, and the floor
  * moves only after a confirmation.
  *
@@ -165,13 +169,14 @@ export class CygnusEventSigner {
         }
         // `m.room.create` has no room yet; its event ID determines the room ID (§5.6).
         const floorRoomId = request.roomId ?? `!${computed.eventId.slice(1)}`;
-        await this._confirm(txnId, floorRoomId, computed.eventId);
+        await this._confirm(txnId, floorKey(this._identity, floorRoomId), computed.eventId);
         return {eventId: computed.eventId, event: signed};
     }
 
     async _draftAndSign(request, txnId, log) {
         const roomId = request.roomId;
-        const floor = roomId ? (await this._get(FLOORS_SESSION_KEY))?.[roomId] : undefined;
+        const key = roomId ? floorKey(this._identity, roomId) : undefined;
+        const floor = key ? (await this._get(FLOORS_SESSION_KEY))?.[key] : undefined;
         const body = {
             type: request.type,
             content: request.content,
@@ -192,7 +197,29 @@ export class CygnusEventSigner {
         if (error) {
             throw new Error(`refusing to sign the homeserver's draft: ${error}`);
         }
+        const staleEpochError = await this._checkStaleEpoch(roomId, draft);
+        if (staleEpochError) {
+            throw new Error(`refusing to sign the homeserver's draft: ${staleEpochError}`);
+        }
         return this._identity.signEvent(draft);
+    }
+
+    async _checkStaleEpoch(roomId, draft) {
+        if (!roomId || !Array.isArray(draft.auth_events)) return undefined;
+        const txn = await this._storage.readTxn([this._storage.storeNames.roomState]);
+        const ownEpoch = await txn.roomState.get(roomId, "m.room.user_epoch", this._identity.principal);
+        const serverEpoch = await txn.roomState.get(roomId, "m.room.server_epoch", this._identity.custodian);
+        for (const [label, entry] of [["user", ownEpoch], ["custodian", serverEpoch]]) {
+            const event = entry?.event;
+            if (!event?.event_id) continue;
+            if (!draft.auth_events.includes(event.event_id)) {
+                return `draft auth_events omit the newest observed ${label} epoch ${event.event_id}`;
+            }
+            if (label === "user" && Number(event.content?.height) !== this._identity.height) {
+                return `room's user epoch height ${event.content?.height} differs from this identity's height ${this._identity.height}`;
+            }
+        }
+        return undefined;
     }
 
     async _get(key) {
@@ -217,11 +244,11 @@ export class CygnusEventSigner {
     }
 
     /** Advance the room's floor and drop the stored signed event, in one transaction. */
-    async _confirm(txnId, roomId, eventId) {
+    async _confirm(txnId, key, eventId) {
         const txn = await this._storage.readWriteTxn([this._storage.storeNames.session]);
         try {
             const floors = await txn.session.get(FLOORS_SESSION_KEY) ?? {};
-            txn.session.set(FLOORS_SESSION_KEY, {...floors, [roomId]: eventId});
+            txn.session.set(FLOORS_SESSION_KEY, {...floors, [key]: eventId});
             txn.session.remove(signedEventKey(txnId));
         } catch (err) {
             txn.abort();

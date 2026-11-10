@@ -7,7 +7,6 @@ Please see LICENSE files in the repository root for full details.
 */
 import type {Key} from "./common";
 import type {Platform} from "../../platform/web/Platform.js";
-import type {Transaction} from "../storage/idb/Transaction";
 import type {Storage} from "../storage/idb/Storage";
 import type {AccountDataEntry} from "../storage/idb/stores/AccountDataStore";
 
@@ -33,22 +32,26 @@ export class SecretStorage {
     private readonly _key: Key;
     private readonly _platform: Platform;
     private readonly _storage: Storage;
+    private readonly _hsApi: any;
+    private readonly _userId: string;
 
-    constructor({key, platform, storage}: {key: Key, platform: Platform, storage: Storage}) {
+    constructor({key, platform, storage, hsApi, userId}: {key: Key, platform: Platform, storage: Storage, hsApi: any, userId: string}) {
         this._key = key;
         this._platform = platform;
         this._storage = storage;
+        this._hsApi = hsApi;
+        this._userId = userId;
     }
 
     /** this method will auto-commit any indexeddb transaction because of its use of the webcrypto api */
-    async hasValidKeyForAnyAccountData() {
+    async hasValidKeyForAnyAccountData(): Promise<boolean> {
         const txn = await this._storage.readTxn([
             this._storage.storeNames.accountData,
         ]);
         const allAccountData = await txn.accountData.getAll();
         for (const accountData of allAccountData) {
             try {
-                const secret = await this._decryptAccountData(accountData);
+                await this._decryptAccountData(accountData);
                 return true; // decryption succeeded
             } catch (err) {
                 if (err instanceof DecryptionError && err.reason !== DecryptionFailure.NotEncryptedWithKey) {
@@ -71,6 +74,51 @@ export class SecretStorage {
             return;
         }
         return await this._decryptAccountData(accountData);
+    }
+
+    async writeSecret(name: string, secret: string, log?: object): Promise<void> {
+        if (!this._hsApi || !this._userId) {
+            throw new Error("secret storage cannot write account data in this session");
+        }
+        const txn = await this._storage.readTxn([this._storage.storeNames.accountData]);
+        const existing = await txn.accountData.get(name);
+        const encrypted = {...(existing?.content?.encrypted || {})};
+        encrypted[this._key.id] = await this._encryptAESSecret(name, secret);
+        const content = {...(existing?.content || {}), encrypted};
+        await this._hsApi.setAccountData(this._userId, name, content, {log}).response();
+        const writeTxn = await this._storage.readWriteTxn([this._storage.storeNames.accountData]);
+        try {
+            writeTxn.accountData.set({type: name, content});
+        } catch (err) {
+            writeTxn.abort();
+            throw err;
+        }
+        await writeTxn.complete();
+    }
+
+    async _encryptAESSecret(type: string, secret: string): Promise<EncryptedData> {
+        const {base64, utf8} = this._platform.encoding;
+        const hkdfKey = await this._platform.crypto.derive.hkdf(
+            this._key.binaryKey,
+            new Uint8Array(8).buffer,
+            utf8.encode(type),
+            "SHA-256",
+            512
+        );
+        const aesKey = hkdfKey.slice(0, 32);
+        const hmacKey = hkdfKey.slice(32);
+        const iv = await this._platform.crypto.aes.generateIV();
+        const ciphertext = await this._platform.crypto.aes.encryptCTR({
+            key: aesKey,
+            iv,
+            data: utf8.encode(secret),
+        });
+        const mac = await this._platform.crypto.hmac.compute(hmacKey, ciphertext, "SHA-256");
+        return {
+            iv: base64.encode(iv),
+            ciphertext: base64.encode(ciphertext),
+            mac: base64.encode(mac),
+        };
     }
 
     async _decryptAccountData(accountData: AccountDataEntry): Promise<string> {

@@ -18,9 +18,10 @@ Nothing has run against a real homeserver yet; `../congruent` will be the first.
 - [x] **Leave uses the plain `/leave`** (`Room.js` `leave`). It must be a
       device-signed `m.room.member` `leave` through `cygnus.sendRoomEvent`-style
       state sending.
-- [ ] **Accepting or rejecting an invite uses `/join` and `/leave`**
+- [x] **Accepting or rejecting an invite uses `/join` and `/leave`**
       (`Invite.js`). The invite view needs to know the room is Cygnus (room
-      version from invite state) and sign the membership.
+      version from invite state) and sign the membership. Failed requests reset
+      the loading state so the action can be retried.
 - [x] **Rejoining an archived room uses `/join`** (`ArchivedRoom.js`).
 - [x] **Group calls send state with `hsApi.sendState`** (`GroupCall.ts`). Hide
       calls in Cygnus rooms or route them through signed sends.
@@ -60,24 +61,27 @@ Nothing has run against a real homeserver yet; `../congruent` will be the first.
 
 ## Client and homeserver protocol work
 
-- [ ] **Secret storage for the rotation key.** The key currently lives in
-      IndexedDB and the localStorage backup. Hydrogen's SSSS implementation can
-      read secrets but does not write them. Add SSSS writing and backup/restore.
-      The proposal now specifies a 32-byte RFC 8032 seed in unpadded standard
-      base64 and one active signer at a time; the client must re-read the secret
-      before signing and write the next key before submitting. No
-      Cygnus-specific homeserver endpoint is needed.
-- [ ] **Revoked-device list.** Hydrogen always sends `[]` on import. Track
-      device revocations locally and carry them across moves. `send_signed` on
-      the homeserver must reject revoked devices through standard device
-      management. The proposal now makes the certificate `device_id` the Matrix
-      device ID and revocation permanent, so a new device must use a fresh ID.
-- [ ] **Stale-epoch heuristic.** Implement the client check against the newest
-      observed epochs. The proposal now makes the device floor mandatory and the
-      epoch check SHOULD in both direct and assisted signing.
-- [ ] **Device floors per room and device.** Hydrogen currently keys floors by
-      room only; the proposal requires `(user, device_id, room)`. In Cygnus
-      rooms, key the user component by principal.
+- [x] **Secret storage for the rotation key.** The 32-byte seed is now written
+      through Matrix secret storage, and clients re-read it before signing and
+      write the next key before submitting a rotation or move. The identity
+      record remains in IndexedDB and its localStorage backup. A user-facing
+      backup/restore flow is still missing (see Recovery above). The proposal
+      now specifies a 32-byte RFC 8032 seed in unpadded standard base64 and one
+      active signer at a time; the client must re-read the secret before signing
+      and write the next key before submitting. No Cygnus-specific homeserver
+      endpoint is needed.
+- [ ] **Revoked-device list.** Device IDs are persisted and included in rotation
+      and move imports; `CygnusService.revokeDevice` records another device and
+      publishes the revocation with a chain advancement. Hydrogen has no
+      device-management UI to choose and confirm a device to revoke.
+      `send_signed` on the homeserver must reject revoked devices. The proposal
+      makes revocation permanent, so a replacement device must use a fresh ID.
+- [x] **Stale-epoch heuristic.** Before signing, compare the draft's
+      `auth_events` with the newest observed user and custodian epochs; refuse
+      when it omits either epoch or the user's epoch height differs from the
+      local chain. The proposal makes this a SHOULD in both signing modes.
+- [x] **Device floors per room and device.** Floors are keyed by principal,
+      device ID, and room ID, as required by the proposal.
 - [x] **Client-side API contract plumbing.** Join drafts now pass `via`; the
       move service sends the full chain and resumes device-signed rebinding
       joins after import; `CygnusRooms` and `CygnusIdentity` refer to the §9

@@ -28,11 +28,25 @@ export class SecretFetcher {
             await this.secretSharing?.getLocallyStoredSecret(name);
     } 
 
-    setSecretStorage(storage: SecretStorage) {
+    setSecretStorage(storage: SecretStorage): void {
         this.secretStorage = storage;
     }
 
-    setSecretSharing(sharing: SecretSharing) {
+    async readSecretStorage(name: string): Promise<string | undefined> {
+        if (!this.secretStorage) {
+            throw new Error("unlock secret storage before using the Cygnus rotation key");
+        }
+        return await this.secretStorage.readSecret(name);
+    }
+
+    async writeSecret(name: string, secret: string, log?: object): Promise<void> {
+        if (!this.secretStorage) {
+            throw new Error("unlock secret storage before saving this secret");
+        }
+        await this.secretStorage.writeSecret(name, secret, log);
+    }
+
+    setSecretSharing(sharing: SecretSharing): void {
         this.secretSharing = sharing;
         /**
          * SecretSharing also needs to respond to secret requests

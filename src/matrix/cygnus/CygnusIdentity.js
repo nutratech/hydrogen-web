@@ -11,6 +11,15 @@ import {SESSION_E2EE_KEY_PREFIX} from "../e2ee/common";
  * second local copy MSC00FC §9 asks for.
  */
 export const IDENTITY_SESSION_KEY = `${SESSION_E2EE_KEY_PREFIX}cygnus.identity`;
+export const ROTATION_KEY_SECRET = "m.principal.rotation_key";
+
+function toBase64Standard(value) {
+    return value.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "") + "=".repeat((4 - value.length % 4) % 4);
+}
+
+function toBase64Url(value) {
+    return value.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
 
 /**
  * The user's MSC00FC principal and the private material this device holds
@@ -31,17 +40,18 @@ export const IDENTITY_SESSION_KEY = `${SESSION_E2EE_KEY_PREFIX}cygnus.identity`;
  * rotation is in flight.
  */
 export class CygnusIdentity {
-    constructor(record, {storage, hsApi, crypto}) {
+    constructor(record, {storage, hsApi, crypto, secretFetcher}) {
         this._record = record;
         this._storage = storage;
         this._hsApi = hsApi;
         this._crypto = crypto;
+        this._secretFetcher = secretFetcher;
     }
 
-    static async load({storage, hsApi, crypto}) {
+    static async load({storage, hsApi, crypto, secretFetcher}) {
         const txn = await storage.readTxn([storage.storeNames.session]);
         const record = await txn.session.get(IDENTITY_SESSION_KEY);
-        return record ? new CygnusIdentity(record, {storage, hsApi, crypto}) : undefined;
+        return record ? new CygnusIdentity(record, {storage, hsApi, crypto, secretFetcher}) : undefined;
     }
 
     /**
@@ -54,9 +64,10 @@ export class CygnusIdentity {
      * @param {string} options.deviceId this device's Matrix device ID
      * @param {string} options.displayUserId the account's Matrix user ID
      */
-    static async create({storage, hsApi, crypto, masterSeed, selfSigningSeed, deviceId, displayUserId, log}) {
+    static async create({storage, hsApi, crypto, secretFetcher, masterSeed, selfSigningSeed, deviceId, displayUserId, log}) {
         const masterKey = crypto.publicKey(masterSeed);
         const rotationSeed = crypto.generateSeed();
+        await secretFetcher?.writeSecret?.(ROTATION_KEY_SECRET, toBase64Standard(rotationSeed), log);
         const nextCommit = crypto.rotationCommitment(rotationSeed);
         const response = await hsApi.cygnusCreatePrincipal(masterKey, nextCommit, {log}).response();
         const genesis = crypto.verifyUserPrincipalResponse(rotationSeed, masterKey, response.principal, response.links);
@@ -78,7 +89,7 @@ export class CygnusIdentity {
             rotationSeed,
             revokedDeviceIds: [],
         };
-        const identity = new CygnusIdentity(record, {storage, hsApi, crypto});
+        const identity = new CygnusIdentity(record, {storage, hsApi, crypto, secretFetcher});
         await identity._persist();
         return identity;
     }
@@ -97,6 +108,19 @@ export class CygnusIdentity {
     get hasPendingRotation() { return !!this._record.pendingRotation; }
     get pendingMove() { return this._record.pendingMove; }
     get pendingRebindRoomIds() { return this._record.pendingRebindRooms?.slice() || []; }
+
+    /** Remember a permanently revoked Matrix device ID for the next custodian import. */
+    async revokeDevice(deviceId) {
+        if (!deviceId || typeof deviceId !== "string") {
+            throw new TypeError("a Matrix device ID is required");
+        }
+        if (this._record.revokedDeviceIds.includes(deviceId)) return;
+        this._record = {
+            ...this._record,
+            revokedDeviceIds: [...this._record.revokedDeviceIds, deviceId],
+        };
+        await this._persist();
+    }
 
     /** Device-sign an event that already carries this identity's certificate. */
     signEvent(event) {
@@ -121,6 +145,7 @@ export class CygnusIdentity {
             throw new Error("finish the pending Cygnus move before rotating keys");
         }
         if (!this._record.pendingRotation) {
+            await this._assertRotationKey(this._record.rotationSeed);
             const nextRotationSeed = this._crypto.generateSeed();
             const link = this._crypto.userSuccessor(
                 this._record.links[this._record.links.length - 1],
@@ -134,6 +159,7 @@ export class CygnusIdentity {
             await this._persist();
         }
         const {link, nextRotationSeed} = this._record.pendingRotation;
+        await this._ensureNextRotationKey(this._record.rotationSeed, nextRotationSeed);
         // §9 defines import for both same-custodian advancement and moves.
         await this._hsApi.cygnusImportPrincipal([link], this._record.revokedDeviceIds, {log}).response();
         const links = [...this._record.links, link];
@@ -152,11 +178,13 @@ export class CygnusIdentity {
             if (pending.custodian !== custodian || pending.displayUserId !== displayUserId) {
                 throw new Error("another Cygnus move is already in progress");
             }
+            await this._ensureNextRotationKey(this._record.rotationSeed, pending.nextRotationSeed);
             return pending;
         }
         if (this._record.pendingRotation) {
             throw new Error("finish the pending Cygnus rotation before moving homeservers");
         }
+        await this._assertRotationKey(this._record.rotationSeed);
         const nextRotationSeed = this._crypto.generateSeed();
         const link = this._crypto.userSuccessor(
             this._record.links[this._record.links.length - 1],
@@ -175,6 +203,7 @@ export class CygnusIdentity {
         };
         this._record = {...this._record, pendingMove};
         await this._persist();
+        await this._ensureNextRotationKey(this._record.rotationSeed, nextRotationSeed);
         return pendingMove;
     }
 
@@ -203,6 +232,25 @@ export class CygnusIdentity {
         const pendingRebindRooms = (this._record.pendingRebindRooms || []).filter(id => id !== roomId);
         this._record = {...this._record, pendingRebindRooms};
         await this._persist();
+    }
+
+    async _assertRotationKey(expectedSeed) {
+        if (!this._secretFetcher) return;
+        const stored = await this._secretFetcher.readSecretStorage(ROTATION_KEY_SECRET);
+        if (!stored || toBase64Url(stored) !== expectedSeed) {
+            throw new Error("secret-storage rotation key differs from this device's current key; refusing to sign a chain link");
+        }
+    }
+
+    async _ensureNextRotationKey(currentSeed, nextSeed) {
+        if (!this._secretFetcher) return;
+        const stored = await this._secretFetcher.readSecretStorage(ROTATION_KEY_SECRET);
+        const storedSeed = stored ? toBase64Url(stored) : undefined;
+        if (storedSeed === nextSeed) return;
+        if (storedSeed !== currentSeed) {
+            throw new Error("secret-storage rotation key differs from this device's current key; refusing to submit the signed link");
+        }
+        await this._secretFetcher.writeSecret(ROTATION_KEY_SECRET, toBase64Standard(nextSeed));
     }
 
     async _persist() {

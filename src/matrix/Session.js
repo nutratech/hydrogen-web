@@ -346,7 +346,7 @@ export class Session {
 
     _tryLoadSecretStorage(ssssKey, log) {
         return log.wrap("enable secret storage", async log => {
-            const secretStorage = new SecretStorage({key: ssssKey, platform: this._platform, storage: this._storage});
+            const secretStorage = new SecretStorage({key: ssssKey, platform: this._platform, storage: this._storage, hsApi: this._hsApi, userId: this._user.id});
             const isValid = await secretStorage.hasValidKeyForAnyAccountData();
             log.set("isValid", isValid);
             if (isValid) {
@@ -728,6 +728,7 @@ export class Session {
         return new Invite({
             roomId,
             hsApi: this._hsApi,
+            getCygnus: () => this._cygnus,
             emitCollectionUpdate: this._inviteUpdateCallback,
             mediaRepository: this._mediaRepository,
             user: this._user,
