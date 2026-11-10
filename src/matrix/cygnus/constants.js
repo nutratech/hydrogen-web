@@ -4,7 +4,7 @@ Please see LICENSE files in the repository root for full details.
 */
 
 /** Room version for MSC00FC (Cygnus) rooms: room v12 plus self-certifying identities. */
-export const CYGNUS_ROOM_VERSION = "tk.nutra.cygnus.1";
+export const CYGNUS_ROOM_VERSION = "tk.nutra.cygnus.12";
 
 /** Principals are a sigil (`~` server, `@` user) plus 43 base64url characters, with no `:domain`. */
 // The final base64url character has only four meaningful bits for 32 bytes.
