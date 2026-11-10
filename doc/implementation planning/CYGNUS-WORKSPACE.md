@@ -34,6 +34,12 @@ The workspace persists `roomId → connectionId`. Ownership is never inferred
 from the room ID or a server name: room version 12 IDs name no server, and both
 accounts can be in the same room.
 
+The map lives in workspace-level storage, beside the session list
+(`sessionInfoStorage`), never inside either account's database: retiring the
+old account or logging one connection out deletes that database, and the
+ownership of every room must survive it. The workspace record holds the
+connection IDs, the ownership map and any in-flight move state.
+
 | Room                                | Owner       | Changes when                             |
 | ----------------------------------- | ----------- | ---------------------------------------- |
 | Rooms that existed before the move  | source      | never, except Cygnus rooms (next row)    |
