@@ -40,7 +40,8 @@ function request(status, body) {
 /** A homeserver that publishes uploaded keys after password UIA (or without it when `uia` is false). */
 function homeserver({uia = true, password = "pw", published = {}} = {}) {
     const uploads = [];
-    const state = {master_keys: published.master_keys, self_signing_keys: published.self_signing_keys};
+    const state = {master_keys: published.master_keys, self_signing_keys: published.self_signing_keys,
+        user_signing_keys: published.user_signing_keys};
     const hsApi = {
         uploads,
         queryKeys: () => request(200, state),
@@ -54,6 +55,7 @@ function homeserver({uia = true, password = "pw", published = {}} = {}) {
             }
             state.master_keys = {[USER]: body.master_key};
             state.self_signing_keys = {[USER]: body.self_signing_key};
+            state.user_signing_keys = {[USER]: body.user_signing_key};
             return request(200, {});
         },
     };
@@ -89,10 +91,33 @@ export function tests() {
             const upload = buildCrossSigningUpload(USER, seeds, signer);
             const hsApi = homeserver({published: {
                 master_keys: {[USER]: upload.master_key}, self_signing_keys: {[USER]: upload.self_signing_key},
+                user_signing_keys: {[USER]: upload.user_signing_key},
             }});
             const result = await publishCrossSigningKeys({hsApi, userId: USER, password: "pw", seeds, signer});
             assert.equal(result.uploaded, false);
             assert.equal(hsApi.uploads.length, 0);
+        },
+        "uploads again when the user-signing key is missing": async assert => {
+            const signer = await nodeSigner();
+            const upload = buildCrossSigningUpload(USER, seeds, signer);
+            const hsApi = homeserver({published: {
+                master_keys: {[USER]: upload.master_key}, self_signing_keys: {[USER]: upload.self_signing_key},
+            }});
+            const result = await publishCrossSigningKeys({hsApi, userId: USER, password: "pw", seeds, signer});
+            assert.equal(result.uploaded, true);
+        },
+        "publishes with one upload when the server asks for no auth": async assert => {
+            const signer = await nodeSigner();
+            const hsApi = homeserver({uia: false});
+            const result = await publishCrossSigningKeys({hsApi, userId: USER, password: "pw", seeds, signer});
+            assert.equal(result.uploaded, true);
+            assert.equal(hsApi.uploads.length, 1);
+        },
+        "reports an errcode from a 401 that is not a UIA challenge": async assert => {
+            const signer = await nodeSigner();
+            const hsApi = homeserver();
+            hsApi.uploadCrossSigningKeys = () => request(401, {errcode: "M_UNKNOWN_TOKEN"});
+            await assert.rejects(publishCrossSigningKeys({hsApi, userId: USER, password: "pw", seeds, signer}), /M_UNKNOWN_TOKEN/);
         },
         "reports a refused password": async assert => {
             const signer = await nodeSigner();

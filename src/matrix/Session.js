@@ -495,6 +495,7 @@ export class Session {
 
     /** @internal */
     async load(log) {
+        await this._cygnus?.loadStoredIdentity().catch(err => log.catch(err));
         const txn = await this._storage.readTxn([
             this._storage.storeNames.session,
             this._storage.storeNames.roomSummary,
@@ -505,6 +506,7 @@ export class Session {
             this._storage.storeNames.pendingEvents,
             this._storage.storeNames.accountData,
             this._storage.storeNames.crossSigningKeys,
+            this._storage.storeNames.roomState,
         ]);
         // restore session object
         this._syncInfo = await txn.session.get("sync");

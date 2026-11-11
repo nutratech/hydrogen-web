@@ -38,15 +38,28 @@ export class Registration {
     }
 
     async start(): Promise<BaseRegistrationStage> {
-        const response = await this._hsApi.register(
+        const request = this._hsApi.register(
             this._accountDetails.username,
             this._accountDetails.password,
             this._accountDetails.initialDeviceDisplayName,
             undefined,
             this._accountDetails.inhibitLogin,
             undefined,
-            this._accountDetails.deviceId).response();
+            this._accountDetails.deviceId);
+        const response = await request.response();
+        if (await request.responseCode() === 200) {
+            // the server needs no further stages; there is no stage to return, so say so plainly
+            this._acceptRegistration(response as RegistrationResponseSuccess);
+            throw new Error("The homeserver registered the account without any authentication stage; read `authData` instead.");
+        }
         return this.parseStagesFromResponse(response);
+    }
+
+    private _acceptRegistration(response: RegistrationResponseSuccess): void {
+        if (this._accountDetails.deviceId && response.device_id !== this._accountDetails.deviceId) {
+            throw new Error(`homeserver assigned device ID ${response.device_id || "(none)"}; expected ${this._accountDetails.deviceId}`);
+        }
+        this._registerResponse = response;
     }
 
     /**
@@ -88,10 +101,7 @@ export class Registration {
     private async parseRegistrationResponse(response: RegistrationResponse, currentStage: BaseRegistrationStage) {
         switch (response.status) {
             case 200:
-                if (this._accountDetails.deviceId && response.device_id !== this._accountDetails.deviceId) {
-                    throw new Error(`homeserver assigned device ID ${response.device_id || "(none)"}; expected ${this._accountDetails.deviceId}`);
-                }
-                this._registerResponse = response;
+                this._acceptRegistration(response);
                 return undefined;
             case 401:
                 if (response.completed?.includes(currentStage.type)) {

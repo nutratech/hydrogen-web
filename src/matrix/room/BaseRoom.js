@@ -231,6 +231,7 @@ export class BaseRoom extends EventEmitter {
             // if called from sync, there is no summary yet
             if (summary) {
                 this._summary.load(summary);
+                await this._backfillRoomVersion(txn);
             }
             if (this._summary.data.encryption) {
                 const roomEncryption = this._createRoomEncryption(this, this._summary.data.encryption);
@@ -244,6 +245,22 @@ export class BaseRoom extends EventEmitter {
             }
         } catch (err) {
             throw new WrappedError(`Could not load room ${this._roomId}`, err);
+        }
+    }
+
+    /** Summaries stored before `roomVersion` was recorded: read it from the stored create event. */
+    async _backfillRoomVersion(txn) {
+        if (this._summary.data.roomVersion != null) {
+            return;
+        }
+        try {
+            const createState = await txn.roomState?.get(this._roomId, "m.room.create", "");
+            const version = createState?.event?.content?.room_version;
+            if (version) {
+                this._summary.data.roomVersion = version;
+            }
+        } catch (_) {
+            // this transaction does not cover room state; the next sync's create event sets it
         }
     }
 
@@ -526,7 +543,20 @@ export class BaseRoom extends EventEmitter {
         if (!observable) {
             this._powerLevelLoading = this._loadPowerLevels();
             const powerLevels = await this._powerLevelLoading;
-            observable = new RetainedObservableValue(powerLevels, () => { this._powerLevels = null; });
+            // a Cygnus room's power levels are keyed by principal, which may arrive after this opens
+            const identity = this.isCygnus ? this._getCygnus?.()?.identity : undefined;
+            let unsubscribeIdentity;
+            observable = new RetainedObservableValue(powerLevels, () => {
+                this._powerLevels = null;
+                unsubscribeIdentity?.();
+            });
+            unsubscribeIdentity = identity?.subscribe(async () => {
+                try {
+                    observable.set(await this._loadPowerLevels());
+                } catch (err) {
+                    console.error("could not reload power levels", err);
+                }
+            });
             this._powerLevels = observable;
             this._powerLevelLoading = null;
         }

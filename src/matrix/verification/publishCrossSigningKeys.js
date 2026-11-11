@@ -74,10 +74,12 @@ function publishedKey(keys, userId) {
 }
 
 /** True when the account already publishes exactly these master and self-signing keys. */
-export async function hasPublishedCrossSigningKeys({hsApi, userId, masterKey, selfSigningKey, log}) {
+export async function hasPublishedCrossSigningKeys({hsApi, userId, masterKey, selfSigningKey, userSigningKey, log}) {
     const response = await hsApi.queryKeys({device_keys: {[userId]: []}}, {log}).response();
     return publishedKey(response.master_keys, userId).includes(masterKey) &&
-        publishedKey(response.self_signing_keys, userId).includes(selfSigningKey);
+        publishedKey(response.self_signing_keys, userId).includes(selfSigningKey) &&
+        // the server returns an account's own user-signing key only to that account
+        (!userSigningKey || publishedKey(response.user_signing_keys, userId).includes(userSigningKey));
 }
 
 /**
@@ -86,19 +88,23 @@ export async function hasPublishedCrossSigningKeys({hsApi, userId, masterKey, se
  * `/keys/query` that the server now returns them.
  *
  * Does nothing when the account already publishes the same master and
- * self-signing keys, so a retried move does not ask the server to replace
+ * self-signing and user-signing keys, so a retried move does not ask the server to replace
  * them. Throws when the server offers no password flow.
  */
 export async function publishCrossSigningKeys({hsApi, userId, password, seeds, signer, log}) {
     const upload = buildCrossSigningUpload(userId, seeds, signer);
     const masterKey = signer.publicKey(seeds.master);
     const selfSigningKey = signer.publicKey(seeds.self_signing);
-    if (await hasPublishedCrossSigningKeys({hsApi, userId, masterKey, selfSigningKey, log})) {
+    const userSigningKey = signer.publicKey(seeds.user_signing);
+    if (await hasPublishedCrossSigningKeys({hsApi, userId, masterKey, selfSigningKey, userSigningKey, log})) {
         return {uploaded: false};
     }
     const first = hsApi.uploadCrossSigningKeys(upload, {log});
     const firstResponse = await first.response();
     if (await first.responseCode() === 401) {
+        if (firstResponse.errcode && !firstResponse.flows) {
+            throw new Error(`the homeserver rejected publishing cross-signing keys (${firstResponse.errcode})`);
+        }
         const flows = firstResponse.flows || [];
         if (!flows.some(flow => flow.stages?.length === 1 && flow.stages[0] === "m.login.password")) {
             throw new Error("the homeserver does not offer password authentication for publishing cross-signing keys");
@@ -118,7 +124,7 @@ export async function publishCrossSigningKeys({hsApi, userId, password, seeds, s
                 secondResponse.errcode ? ` (${secondResponse.errcode})` : ""}`);
         }
     }
-    if (!await hasPublishedCrossSigningKeys({hsApi, userId, masterKey, selfSigningKey, log})) {
+    if (!await hasPublishedCrossSigningKeys({hsApi, userId, masterKey, selfSigningKey, userSigningKey, log})) {
         throw new Error("the homeserver accepted the cross-signing keys but does not publish them");
     }
     return {uploaded: true};

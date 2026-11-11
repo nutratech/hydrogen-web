@@ -126,7 +126,22 @@ export class CygnusService {
         this._isSupported = versions?.unstable_features?.[CYGNUS_UNSTABLE_FEATURE] === true;
         log?.set("supported", this._isSupported);
         await this._crypto.load(this._wasmSource);
-        this.identity.set(await CygnusIdentity.load(this._deps()));
+        if (!this.identity.get()) {
+            this.identity.set(await CygnusIdentity.load(this._deps()));
+        }
+    }
+
+    /**
+     * Read the stored identity record only (no wasm, no network), so a session knows its
+     * principal before the first sync recognises principal-keyed invites and events.
+     */
+    async loadStoredIdentity() {
+        if (!this.identity.get()) {
+            const identity = await CygnusIdentity.load(this._deps());
+            if (identity) {
+                this.identity.set(identity);
+            }
+        }
     }
 
     /**

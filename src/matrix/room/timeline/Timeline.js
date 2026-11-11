@@ -170,9 +170,11 @@ export class Timeline extends RetainedValue {
             this._storage.storeNames.timelineRelations,
         ]);
         const relations = await txn.timelineRelations.getForTargetAndType(this._roomId, targetId, ANNOTATION_RELATION_TYPE);
+        // resolved now, not at load: a Cygnus identity may have been created since the timeline opened
+        const ownUserIds = this._getOwnUserIds?.() || this._ownUserIds;
         for (const relation of relations) {
             const annotation = await txn.timelineEvents.getByEventId(this._roomId, relation.sourceEventId);
-            if (annotation && this._ownUserIds.includes(annotation.event.sender) && getRelation(annotation.event).key === key) {
+            if (annotation && ownUserIds.includes(annotation.event.sender) && getRelation(annotation.event).key === key) {
                 const eventEntry = new EventEntry(annotation, this._fragmentIdComparer);
                 this._addLocalRelationsToNewRemoteEntries([eventEntry]);
                 return eventEntry;
