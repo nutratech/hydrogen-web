@@ -202,14 +202,22 @@ export class CygnusService {
         return identity;
     }
 
-    async rotate(log) {
+    rotate(log) {
+        return this._withIdentityLock(() => this._rotate(log));
+    }
+
+    async _rotate(log) {
         const identity = this._requireIdentity();
         await identity.rotate({log});
         this.identity.set(identity);
     }
 
     /** Permanently revoke another Matrix device and publish the list with a chain advancement. */
-    async revokeDevice(deviceId, log) {
+    revokeDevice(deviceId, log) {
+        return this._withIdentityLock(() => this._revokeDevice(deviceId, log));
+    }
+
+    async _revokeDevice(deviceId, log) {
         const identity = this._requireIdentity();
         if (deviceId === identity.deviceId) {
             throw new Error("another active Cygnus signer must revoke this device");
@@ -235,7 +243,11 @@ export class CygnusService {
     }
 
     /** Sign and retire this source device, retaining only an encrypted bundle for retry. */
-    async prepareMoveHandoff({custodian, displayUserId, roomIds = [], passphrase, log} = {}) {
+    prepareMoveHandoff(options = {}) {
+        return this._withIdentityLock(() => this._prepareMoveHandoff(options));
+    }
+
+    async _prepareMoveHandoff({custodian, displayUserId, roomIds = [], passphrase, log} = {}) {
         const identity = this.identity.get();
         if (!identity) throw new Error("no source Cygnus identity is available to move");
         if (identity.isRetired) {
