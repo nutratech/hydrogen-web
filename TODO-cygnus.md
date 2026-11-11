@@ -112,14 +112,16 @@ explicitly.
 - **Cross-signing on the new account.** §5.2.1 binds the principal to the
   account's cross-signing master key, and `POST /principal` checks it. The
   destination account must publish the same master key as its cross-signing
-  master key. `publishCrossSigningKeys` can upload them, but the move flow does not call it yet. The proposal should
-  say whether `/principal/import` checks this too.
+  master key. `importMoveHandoff` publishes all three carried keys before
+  validating them, through either a `publishCrossSigningKeys` callback or a
+  `requestPassword` prompt for UIA; the move screen still has to supply one. The
+  proposal should say whether `/principal/import` checks this too.
 - **Source session after the move.** It stays logged in on the old homeserver,
   retired. Offer to log it out.
 - **Move screen.** The service encrypts and retains the bundle; the UI still
   needs to collect a passphrase before source preparation, transfer the
-  ciphertext, and offer recovery/retry. Once the source signs the move link,
-  the flow must resume that same link rather than cancel it.
+  ciphertext, and offer recovery/retry. Once the source signs the move link, the
+  flow must resume that same link rather than cancel it.
 
 ## Client and homeserver protocol work
 
@@ -141,7 +143,8 @@ explicitly.
 - [x] **Stale-epoch heuristic.** Before signing, compare the draft's
       `auth_events` with the newest observed user and custodian epochs; refuse
       when it cites an older observed epoch event. Unseen or omitted epochs are
-      accepted because the homeserver may be ahead of `/sync`. The proposal makes this a SHOULD in both signing modes.
+      accepted because the homeserver may be ahead of `/sync`. The proposal
+      makes this a SHOULD in both signing modes.
 - [x] **Device floors per room and device.** Floors are keyed by principal,
       device ID, and room ID, as required by the proposal.
 - [x] **Client-side API contract plumbing.** Join drafts now pass `via`; the

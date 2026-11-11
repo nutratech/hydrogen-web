@@ -126,12 +126,12 @@ export function tests() {
             await ask("hasRoomOpen", {sessionId: "s2", roomId: "!r"});
             await ask("hasSessionOpen", {sessionId: "s-hidden"});
             assert.deepEqual(replies, [true, false, true]);
-            handler.updateAuthData({accessToken: "a", homeserver: "https://old"});
+            handler.updateAuthData({accessToken: "a", homeserver: "https://old", sessionId: "s1"});
             handler.updateConnectionAuthData("s-hidden", {accessToken: "b", homeserver: "https://new"});
             replies.length = 0;
             await ask("getAuthInfo", {});
-            assert.deepEqual(replies[0], {accessToken: "a", homeserver: "https://old",
-                connections: [{accessToken: "b", homeserver: "https://new"}]});
+            assert.deepEqual(replies[0], {accessToken: "a", homeserver: "https://old", sessionId: "s1",
+                connections: [{accessToken: "b", homeserver: "https://new", sessionId: "s-hidden"}]});
             handler.removeConnectionAuthData("s-hidden");
             replies.length = 0;
             await ask("getAuthInfo", {});

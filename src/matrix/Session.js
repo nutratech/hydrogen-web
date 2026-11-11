@@ -111,6 +111,7 @@ export class Session {
             secretFetcher: this._secretFetcher,
             userId: sessionInfo.userId,
             deviceId: sessionInfo.deviceId,
+            olm,
             getRandomValues: bytes => self.crypto.getRandomValues(bytes),
             subtleCrypto: self.crypto.subtle || self.crypto.webkitSubtle,
         }) : undefined;

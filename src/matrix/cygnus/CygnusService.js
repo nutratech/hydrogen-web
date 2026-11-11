@@ -9,6 +9,7 @@ import {CygnusIdentity} from "./CygnusIdentity.js";
 import {CygnusEventSigner} from "./CygnusEventSigner.js";
 import {CygnusRooms} from "./CygnusRooms.js";
 import {isCygnusRoomVersion} from "./constants.js";
+import {hasPublishedCrossSigningKeys, olmSigner, publishCrossSigningKeys} from "../verification/publishCrossSigningKeys.js";
 
 /** The `unstable_features` flag a homeserver advertises for MSC00FC. */
 export const CYGNUS_UNSTABLE_FEATURE = "tk.nutra.cygnus";
@@ -89,12 +90,13 @@ async function decryptMoveBundle(encrypted, passphrase, subtle) {
  * never fetch the wasm module.
  */
 export class CygnusService {
-    constructor({storage, hsApi, secretFetcher, userId, deviceId, getRandomValues, subtleCrypto, wasmSource}) {
+    constructor({storage, hsApi, secretFetcher, userId, deviceId, olm, getRandomValues, subtleCrypto, wasmSource}) {
         this._storage = storage;
         this._hsApi = hsApi;
         this._secretFetcher = secretFetcher;
         this._userId = userId;
         this._deviceId = deviceId;
+        this._crossSigningSigner = olm ? olmSigner(olm) : undefined;
         this._wasmSource = wasmSource;
         this._getRandomValues = getRandomValues;
         this._subtleCrypto = subtleCrypto || (typeof window !== "undefined" ? window.crypto?.subtle : undefined);
@@ -237,7 +239,8 @@ export class CygnusService {
             this._secretFetcher.readSecretStorage("m.cross_signing.self_signing"),
             this._secretFetcher.readSecretStorage("m.cross_signing.user_signing"),
         ]);
-        if (!masterSeed || !selfSigningSeed || this._crypto.publicKey(base64ToBase64Url(masterSeed)) !== identity.masterKey) {
+        if (!masterSeed || !selfSigningSeed || !userSigningSeed ||
+            this._crypto.publicKey(base64ToBase64Url(masterSeed)) !== identity.masterKey) {
             throw new Error("source secret storage does not contain the cross-signing keys for this identity");
         }
         if (!identity.pendingMove && !identity.revokedDeviceIds.includes(identity.deviceId)) {
@@ -287,25 +290,21 @@ export class CygnusService {
 
     /**
      * Import a source-signed, passphrase-encrypted handoff on this destination session.
-     * `publishCrossSigningKeys({masterSeed, selfSigningSeed, userSigningSeed})`, when
-     * given, publishes the carried keys on the destination account first (it needs the
-     * account password, which only the caller has); it must be idempotent.
+     * Before validating the carried keys, publish them on this account if needed:
+     * `publishCrossSigningKeys({masterSeed, selfSigningSeed, userSigningSeed})`
+     * takes precedence and must be idempotent; otherwise `requestPassword` is called
+     * only when the account does not already publish them, so the caller can show
+     * the UIA password prompt.
      */
-    async importMoveHandoff(encryptedBundle, passphrase, {sourceService, custodian, publishCrossSigningKeys, log} = {}) {
+    async importMoveHandoff(encryptedBundle, passphrase, {sourceService, custodian, requestPassword, publishCrossSigningKeys: publishKeys, log} = {}) {
         this._requireSupport();
         const bundle = await decryptMoveBundle(encryptedBundle, passphrase, this._subtleCrypto);
         this._validateMoveBundle(bundle, custodian);
-        if (publishCrossSigningKeys) {
-            await publishCrossSigningKeys({
-                masterSeed: bundle.masterSeed,
-                selfSigningSeed: bundle.selfSigningSeed,
-                userSigningSeed: bundle.userSigningSeed,
-            });
-        }
-        await this._validateDestinationCrossSigningKeys(bundle, log);
         if (!this._secretFetcher?.hasSecretStorage) {
             throw new Error("unlock destination secret storage before moving the Cygnus identity");
         }
+        await this._publishDestinationCrossSigningKeys(bundle, requestPassword, publishKeys, log);
+        await this._validateDestinationCrossSigningKeys(bundle, log);
         let identity = this.identity.get();
         if (!identity) {
             const record = {
@@ -398,6 +397,7 @@ export class CygnusService {
         }
         await this._secretFetcher.writeSecret("m.cross_signing.master", bundle.masterSeed, log);
         await this._secretFetcher.writeSecret("m.cross_signing.self_signing", bundle.selfSigningSeed, log);
+        await this._secretFetcher.writeSecret("m.cross_signing.user_signing", bundle.userSigningSeed, log);
         await this._secretFetcher.writeSecret("m.principal.rotation_key", base64UrlToBase64(identity.rotationSeed), log);
         identity.setSecretFetcher(this._secretFetcher);
         if (identity.isHandoffPending) await identity.finishMoveHandoff();
@@ -406,12 +406,52 @@ export class CygnusService {
         this.identity.set(identity);
     }
 
+    async _publishDestinationCrossSigningKeys(bundle, requestPassword, publishKeys, log) {
+        const seedStrings = {
+            master: base64ToBase64Url(bundle.masterSeed),
+            self_signing: base64ToBase64Url(bundle.selfSigningSeed),
+            user_signing: base64ToBase64Url(bundle.userSigningSeed),
+        };
+        if (!seedStrings.user_signing) {
+            throw new Error("move bundle is missing the user-signing seed");
+        }
+        if (publishKeys) {
+            await publishKeys({masterSeed: bundle.masterSeed, selfSigningSeed: bundle.selfSigningSeed,
+                userSigningSeed: bundle.userSigningSeed});
+            return;
+        }
+        const expectedKeys = {
+            hsApi: this._hsApi,
+            userId: this._userId,
+            masterKey: this._crypto.publicKey(seedStrings.master),
+            selfSigningKey: this._crypto.publicKey(seedStrings.self_signing),
+            userSigningKey: this._crypto.publicKey(seedStrings.user_signing),
+            log,
+        };
+        if (await hasPublishedCrossSigningKeys(expectedKeys)) return;
+        if (typeof requestPassword !== "function") {
+            throw new Error("publishing the carried cross-signing keys requires a password prompt");
+        }
+        if (!this._crossSigningSigner) {
+            throw new Error("Olm is unavailable for publishing the destination cross-signing keys");
+        }
+        const password = await requestPassword();
+        const seeds = {
+            master: decodeBytes(seedStrings.master),
+            self_signing: decodeBytes(seedStrings.self_signing),
+            user_signing: decodeBytes(seedStrings.user_signing),
+        };
+        await publishCrossSigningKeys({hsApi: this._hsApi, userId: this._userId, password, seeds,
+            signer: this._crossSigningSigner, log});
+    }
+
     _validateMoveBundle(bundle, custodian) {
         if (bundle?.version !== 1 || !bundle.record || !bundle.sourceDeviceId ||
             !Array.isArray(bundle.links) || !bundle.links.length ||
             typeof bundle.rotationKey !== "string" ||
             typeof bundle.masterSeed !== "string" ||
             typeof bundle.selfSigningSeed !== "string" ||
+            typeof bundle.userSigningSeed !== "string" ||
             !Array.isArray(bundle.revokedDeviceIds) ||
             !Array.isArray(bundle.roomIds) ||
             !bundle.record.principal || !bundle.record.custodian || !bundle.record.displayUserId ||
@@ -459,6 +499,7 @@ export class CygnusService {
     async _validateDestinationCrossSigningKeys(bundle, log) {
         const masterKey = this._crypto.publicKey(base64ToBase64Url(bundle.masterSeed));
         const selfSigningKey = this._crypto.publicKey(base64ToBase64Url(bundle.selfSigningSeed));
+        const userSigningKey = this._crypto.publicKey(base64ToBase64Url(bundle.userSigningSeed));
         if (masterKey !== bundle.record.masterKey) {
             throw new Error("carried cross-signing master key does not match the principal");
         }
@@ -467,7 +508,9 @@ export class CygnusService {
         }, {log}).response();
         const masterKeys = Object.values(response.master_keys?.[this._userId]?.keys || {});
         const selfSigningKeys = Object.values(response.self_signing_keys?.[this._userId]?.keys || {});
-        if (!masterKeys.includes(masterKey) || !selfSigningKeys.includes(selfSigningKey)) {
+        const userSigningKeys = Object.values(response.user_signing_keys?.[this._userId]?.keys || {});
+        if (!masterKeys.includes(masterKey) || !selfSigningKeys.includes(selfSigningKey) ||
+            !userSigningKeys.includes(userSigningKey)) {
             throw new Error("destination account does not publish the carried cross-signing keys");
         }
     }

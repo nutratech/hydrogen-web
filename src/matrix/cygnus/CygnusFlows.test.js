@@ -21,6 +21,7 @@ const USR_MSK = "Ly8vLy8vLy8vLy8vLy8vLy8vLy8vLy8vLy8vLy8vLy8";
 const USR_ROT_1 = "ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISE";
 const USR_ROT_2 = "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI";
 const SELF_SIGNING = "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM";
+const USR_USK = "NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ";
 const U0 = "AQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4kBxguvojRXkm6JtORb1xDcBb37XlTZ9vN8bcmesKPLKBFMfYYrXmaC8fTsASfePhgrlaw5LF0TpCGLi5_C29AW4ywZdB8K-CYGEq6Z_RPYo4lEci4Ilk3SOXOPVSphU7ABdAYWxpY2U6Y2hhdC5leGFtcGxlLm9yZw";
 const USER_U = "@Cl5rPGgj2s7JHMwFxSEOHfFYM_K0PDpnhXEMYwMgQuo";
 const SERVER_A = "~soEUx9hiteZoLx9OwBJ94-GCuVrDksXROkIYuLn8Lb0";
@@ -264,6 +265,7 @@ export function tests() {
             const sourceSecrets = memorySecrets({
                 "m.cross_signing.master": toStandard(USR_MSK),
                 "m.cross_signing.self_signing": toStandard(SELF_SIGNING),
+                "m.cross_signing.user_signing": toStandard(USR_USK),
             });
             const {identity, crypto, storage} = await aliceIdentity([SELF_SIGNING, USR_ROT_2], {secretFetcher: sourceSecrets});
             const sourceService = new CygnusService({
@@ -291,6 +293,7 @@ export function tests() {
             destination.queryKeys = () => request({
                 master_keys: {[destinationService._userId]: {keys: {master: crypto.publicKey(USR_MSK)}}},
                 self_signing_keys: {[destinationService._userId]: {keys: {self_signing: crypto.publicKey(SELF_SIGNING)}}},
+                user_signing_keys: {[destinationService._userId]: {keys: {user_signing: crypto.publicKey(USR_USK)}}},
             });
             const imports = [];
             let failImport = true;
@@ -370,6 +373,7 @@ export function tests() {
             const sourceSecrets = memorySecrets({
                 "m.cross_signing.master": toStandard(USR_MSK),
                 "m.cross_signing.self_signing": toStandard(SELF_SIGNING),
+                "m.cross_signing.user_signing": toStandard(USR_USK),
             });
             const {identity, crypto, storage} = await aliceIdentity([SELF_SIGNING, USR_ROT_2], {secretFetcher: sourceSecrets});
             const sourceService = new CygnusService({
@@ -397,6 +401,7 @@ export function tests() {
             destination.queryKeys = () => request({
                 master_keys: {[destinationService._userId]: {keys: {master: crypto.publicKey(USR_MSK)}}},
                 self_signing_keys: {[destinationService._userId]: {keys: {self_signing: crypto.publicKey(SELF_SIGNING)}}},
+                user_signing_keys: {[destinationService._userId]: {keys: {user_signing: crypto.publicKey(USR_USK)}}},
             });
             destination.cygnusImportPrincipal = links => request({principal: USER_U, links});
             const createCertificate = crypto.createDeviceCertificate.bind(crypto);

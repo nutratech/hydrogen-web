@@ -135,7 +135,8 @@ export class ServiceWorkerHandler {
         } else if (data.type === "getAuthInfo") {
             event.source.postMessage({
                 replyTo: data.id,
-                payload: {...this._authData, connections: [...this._connectionAuthData.values()]},
+                payload: {...this._authData, connections: [...this._connectionAuthData.entries()]
+                    .map(([sessionId, auth]) => ({...auth, sessionId}))},
             });
         }
     }

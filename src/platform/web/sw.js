@@ -108,11 +108,19 @@ async function handleRequest({ request, clientId }) {
 
         // rewrite / to /index.html so it hits the cache
         const url = new URL(request.url);
+        const requestedSessionId = url.searchParams.get("_hydrogen_session_id");
         if (
             url.origin === baseURL.origin &&
             url.pathname === baseURL.pathname
         ) {
             request = new Request(new URL("index.html", baseURL.href));
+        }
+        const cacheRequest = request;
+        let networkRequest = request;
+        if (requestedSessionId) {
+            const networkUrl = new URL(request.url);
+            networkUrl.searchParams.delete("_hydrogen_session_id");
+            networkRequest = new Request(networkUrl.href, request);
         }
 
         // Add access token for authenticated media endpoints
@@ -136,13 +144,13 @@ async function handleRequest({ request, clientId }) {
             }
             // Only add the access-token if we know that this request
             // is going to that homeserver.
-            const auth = candidates.find(
-                ({ homeserver }) => new URL(homeserver).origin === url.origin
-            );
-            if (auth) {
-                const headers = new Headers(request.headers);
+            const auth = requestedSessionId
+                ? candidates.find(candidate => candidate.sessionId === requestedSessionId)
+                : candidates.find(({ homeserver }) => new URL(homeserver).origin === url.origin);
+            if (auth && new URL(auth.homeserver).origin === url.origin) {
+                const headers = new Headers(networkRequest.headers);
                 headers.set("authorization", `Bearer ${auth.accessToken}`);
-                request = new Request(request, {
+                networkRequest = new Request(networkRequest, {
                     mode: "cors",
                     credentials: "omit",
                     headers,
@@ -150,22 +158,22 @@ async function handleRequest({ request, clientId }) {
             }
         }
 
-        let response = await readCache(request);
+        let response = await readCache(cacheRequest);
         if (!response) {
             // use cors so the resource in the cache isn't opaque and uses up to 7mb
             // https://developers.google.com/web/tools/chrome-devtools/progressive-web-apps?utm_source=devtools#opaque-responses
             if (isCacheableThumbnail(url)) {
-                response = await fetch(request, {
+                response = await fetch(networkRequest, {
                     signal: pendingFetchAbortController.signal,
                     mode: "cors",
                     credentials: "omit",
                 });
             } else {
-                response = await fetch(request, {
+                response = await fetch(networkRequest, {
                     signal: pendingFetchAbortController.signal,
                 });
             }
-            await updateCache(request, response);
+            await updateCache(cacheRequest, response);
         }
         return response;
     } catch (err) {

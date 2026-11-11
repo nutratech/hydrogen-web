@@ -326,6 +326,7 @@ export class Client {
             .response();
         const mediaRepository = new MediaRepository({
             homeserver: sessionInfo.homeServer,
+            sessionId: sessionInfo.id,
             platform: this._platform,
             serverVersions: lastVersionsResponse.versions,
         });
@@ -338,7 +339,7 @@ export class Client {
         if (sessionInfo.hidden) {
             this._platform.updateService?.updateConnectionAuthData?.(sessionInfo.id, auth);
         } else {
-            this._platform.updateService.updateAuthData(auth);
+            this._platform.updateService.updateAuthData({...auth, sessionId: sessionInfo.id});
         }
 
         this._session = new Session({
