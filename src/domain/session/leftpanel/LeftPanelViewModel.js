@@ -18,8 +18,9 @@ import {addPanelIfNeeded} from "../../navigation";
 export class LeftPanelViewModel extends ViewModel {
     constructor(options) {
         super(options);
-        const {session} = options;
-        this._tileViewModelsMap = this._mapTileViewModels(session.roomsBeingCreated, session.invites, session.rooms);
+        // one session's maps, or a workspace's maps merged across its connections
+        const {rooms, invites, roomsBeingCreated} = options.roomLists ?? options.session;
+        this._tileViewModelsMap = this._mapTileViewModels(roomsBeingCreated, invites, rooms);
         this._tileViewModelsFilterMap = new ApplyMap(this._tileViewModelsMap);
         this._tileViewModels = this._tileViewModelsFilterMap.sortValues((a, b) => a.compare(b));
         this._currentTileVM = null;

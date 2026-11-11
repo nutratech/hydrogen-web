@@ -7,7 +7,9 @@ import {WorkspaceConnections, ConnectionStatus} from "./WorkspaceConnections.js"
 import {WorkspaceStorage, isVisibleSessionInfo} from "./WorkspaceStorage.js";
 import {RoomViewModelObservable} from "../../domain/session/RoomViewModelObservable.js";
 import {ObservableValue} from "../../observable/value";
+import {ObservableMap} from "../../observable";
 import {LoadStatus} from "../Client.js";
+import {WorkspaceRoomMap} from "./WorkspaceRoomMap.js";
 import {RoomStatus} from "../room/common";
 
 function memoryBacking() {
@@ -15,11 +17,11 @@ function memoryBacking() {
     return {items, getItem: key => items.get(key) ?? null, setItem: (key, value) => items.set(key, value)};
 }
 
-function fakeSession(name) {
+function fakeSession(name, {rooms = ["!r"], invites = []} = {}) {
     return {
         name,
-        rooms: new Map([["!r", {id: "!r", from: name}]]),
-        invites: new Map(),
+        rooms: new ObservableMap(rooms.map(id => [id, {id, from: name}])),
+        invites: new ObservableMap(invites.map(id => [id, {id, from: name, isInvite: true}])),
         roomsBeingCreated: new Map(),
         async observeRoomStatus() { return new ObservableValue(RoomStatus.Joined); },
     };
@@ -30,7 +32,7 @@ function fakeSession(name) {
  * loading until `finish()`); hidden starts write their session info the way
  * `Client._createSessionAfterAuth` does.
  */
-function fakeClient(name, {outcome = "ready", sessionInfos} = {}) {
+function fakeClient(name, {outcome = "ready", sessionInfos, holds} = {}) {
     const client = {
         name,
         loadStatus: new ObservableValue(LoadStatus.NotLoading),
@@ -41,7 +43,7 @@ function fakeClient(name, {outcome = "ready", sessionInfos} = {}) {
         createNewSessionId: () => `session-${name}`,
         finish(result = "ready") {
             if (result === "ready") {
-                client.session = fakeSession(name);
+                client.session = fakeSession(name, holds);
                 client.loadStatus.set(LoadStatus.Ready);
             } else {
                 client.loadError = new Error(`${name} failed`);
@@ -68,13 +70,13 @@ function fakeClient(name, {outcome = "ready", sessionInfos} = {}) {
     return client;
 }
 
-function setup({destinationSessionInfo = true, clientOptions = {}} = {}) {
+function setup({destinationSessionInfo = true, clientOptions = {}, sourceHolds} = {}) {
     let next = 0;
     const workspaceStorage = new WorkspaceStorage("ws", memoryBacking(), () => `id${next++}`);
     let workspace = workspaceStorage.ensureForSession("s-source");
     const sessionInfos = new Map([["s-source", {id: "s-source"}]]);
     const sessionInfoStorage = {get: async id => sessionInfos.get(id), getAll: async () => [...sessionInfos.values()]};
-    const source = fakeClient("source");
+    const source = fakeClient("source", {holds: sourceHolds});
     source.finish();
     const created = [];
     const createClient = () => {
@@ -196,6 +198,86 @@ export function tests() {
             }
             assert.equal(observable.get().kind, "room");
             assert.deepEqual(created, ["!r"]);
+            observable.dispose();
+        },
+        "destination-only rooms and invites are claimed; rooms both accounts hold stay with the source": async assert => {
+            const env = setup({
+                sourceHolds: {rooms: ["!both", "!src"], invites: ["!inv-both"]},
+                clientOptions: {holds: {rooms: ["!both", "!dst"], invites: ["!inv-both", "!inv-dst"]}},
+            });
+            const dest = env.addDestination();
+            const connections = env.connections();
+            await connections.start();
+            const ws = connections.workspace;
+            assert.equal(ws.ownerOf("!dst"), dest);
+            assert.equal(ws.ownerOf("!inv-dst"), dest);
+            assert.equal(ws.ownerOf("!both"), ws.sourceConnectionId);
+            assert.equal(ws.ownerOf("!inv-both"), ws.sourceConnectionId);
+            // a later invite or join on the destination is claimed as it arrives
+            const destSession = connections.roomRouter.sessionForConnection(dest);
+            destSession.invites.add("!later", {id: "!later", from: "c0"});
+            destSession.rooms.add("!src", {id: "!src", from: "c0"});
+            assert.equal(connections.workspace.ownerOf("!later"), dest);
+            assert.equal(connections.workspace.ownerOf("!src"), ws.sourceConnectionId);
+            // and survives a reload
+            assert.equal(env.workspaceStorage.get(ws.id).ownerOf("!later"), dest);
+        },
+        "the merged room list shows each room once, from its owner, without resets": async assert => {
+            const env = setup({
+                sourceHolds: {rooms: ["!both", "!src"]},
+                clientOptions: {outcome: "pending", holds: {rooms: ["!both", "!dst"]}},
+            });
+            env.addDestination();
+            const connections = env.connections();
+            const rooms = new WorkspaceRoomMap(connections.roomRouter, s => s.rooms);
+            const events = [];
+            const unsubscribe = rooms.subscribe({
+                onAdd: (k, v) => events.push(`add ${k} ${v.from}`),
+                onUpdate: (k) => events.push(`update ${k}`),
+                onRemove: (k, v) => events.push(`remove ${k} ${v.from}`),
+                onReset: () => events.push("reset"),
+            });
+            assert.deepEqual([...rooms].map(([k, v]) => `${k} ${v.from}`), ["!both source", "!src source"]);
+            const started = connections.start();
+            await Promise.resolve();
+            await Promise.resolve();
+            env.created[0].finish();
+            await started;
+            assert.deepEqual(events, ["add !dst c0"]);
+            assert.deepEqual([...rooms].map(([k, v]) => `${k} ${v.from}`).sort(), ["!both source", "!dst c0", "!src source"]);
+            // an owner change moves the room's entry to the new owner's object
+            events.length = 0;
+            connections.roomRouter.claimRoom("!both", connections.workspace.connections[1].id);
+            assert.deepEqual(events, ["remove !both source", "add !both c0"]);
+            // a destination becoming unavailable takes its rooms out of the list
+            events.length = 0;
+            connections._setStatus(connections.workspace.connections[1].id, {status: ConnectionStatus.Unavailable});
+            assert.deepEqual(events.sort(), ["remove !both c0", "remove !dst c0"]);
+            unsubscribe();
+        },
+        "an open room follows its owner to another connection": async assert => {
+            const env = setup({sourceHolds: {rooms: ["!x"]}, clientOptions: {holds: {rooms: ["!x"]}}});
+            const dest = env.addDestination();
+            const connections = env.connections();
+            await connections.start();
+            const shown = [];
+            const sessionViewModel = {
+                roomRouter: connections.roomRouter,
+                _createUnavailableRoomViewModel: id => ({kind: "unavailable", id, dispose() {}}),
+                _createRoomViewModelInstance: id => {
+                    const from = connections.roomRouter.sessionForRoom(id).name;
+                    shown.push(from);
+                    return {kind: "room", from, dispose() {}};
+                },
+            };
+            const observable = new RoomViewModelObservable(sessionViewModel, "!x");
+            await observable.initialize();
+            connections.roomRouter.claimRoom("!x", dest);
+            for (let i = 0; i < 5; i++) {
+                await Promise.resolve();
+            }
+            assert.deepEqual(shown, ["source", "c0"]);
+            assert.equal(observable.get().from, "c0");
             observable.dispose();
         },
     };

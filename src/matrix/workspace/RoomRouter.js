@@ -44,19 +44,20 @@ export class RoomRouter {
             throw new Error("a router serves one workspace");
         }
         this._workspace = workspace;
-        this.notifySessionsChanged();
+        this.notifyChanged();
     }
 
     /**
-     * Call `listener` whenever a connection's session arrives or goes away, so
-     * a room shown as unavailable can look again. Returns an unsubscribe function.
+     * Call `listener` whenever a connection's session arrives or goes away, or
+     * a room changes owner, so whatever routed a room can route it again.
+     * Returns an unsubscribe function.
      */
-    subscribeSessions(listener) {
+    subscribeChanges(listener) {
         this._listeners.add(listener);
         return () => { this._listeners.delete(listener); };
     }
 
-    notifySessionsChanged() {
+    notifyChanged() {
         for (const listener of [...this._listeners]) {
             listener();
         }
@@ -64,6 +65,13 @@ export class RoomRouter {
 
     sessionForConnection(connectionId) {
         return this._sessions.get(connectionId);
+    }
+
+    /** `[connectionId, session]` for every live connection, the source first when it is live. */
+    liveSessions() {
+        const entries = [...this._sessions.entries()].filter(([, session]) => session);
+        const sourceId = this._workspace?.sourceConnectionId;
+        return entries.sort(([a], [b]) => (b === sourceId) - (a === sourceId));
     }
 
     /** The connection that owns `roomId`. */
@@ -114,17 +122,39 @@ export class RoomRouter {
     }
 
     /**
-     * Record that `connectionId` owns `roomId`, after creating or joining it
-     * there. Without this a room only the destination sees would route to the
-     * source after a reload. Owning by the source keeps the map sparse.
+     * Record that `connectionId` owns `roomId`. Without this a room only the
+     * destination sees would route to the source after a reload. Owning by the
+     * source keeps the map sparse.
      */
     claimRoom(roomId, connectionId) {
+        this.claimRooms([roomId], connectionId);
+    }
+
+    /** `claimRoom` for several rooms in one write and one change notification. */
+    claimRooms(roomIds, connectionId) {
         if (!this._workspace || !this._workspaceStorage) {
             return;
         }
-        if (this._workspace.ownerOf(roomId) === connectionId) {
+        const changed = roomIds.filter(roomId => this._workspace.ownerOf(roomId) !== connectionId);
+        if (changed.length === 0) {
             return;
         }
-        this._workspace = this._workspaceStorage.setRoomOwner(this._workspace.id, roomId, connectionId);
+        this._workspace = this._workspaceStorage.setRoomOwners(this._workspace.id, changed, connectionId);
+        this.notifyChanged();
+    }
+
+    /**
+     * The rooms and invites `connectionId` holds that should be its own: those
+     * the source connection does not also hold. A room both accounts are in
+     * stays with the source, so joining it from the destination neither shows
+     * it twice nor flips its owner. Used for joins, creations and invites alike.
+     */
+    unclaimedRoomIds(connectionId, roomIds) {
+        if (!this._workspace || connectionId === this._workspace.sourceConnectionId) {
+            return [];
+        }
+        const source = this.sessionForConnection(this._workspace.sourceConnectionId);
+        return roomIds.filter(roomId => this._workspace.ownerOf(roomId) !== connectionId &&
+            !source?.rooms.get(roomId) && !source?.invites.get(roomId));
     }
 }

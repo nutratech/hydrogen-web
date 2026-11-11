@@ -22,6 +22,7 @@ import {JoinRoomViewModel} from "./JoinRoomViewModel";
 import {DeviceVerificationViewModel} from "./verification/DeviceVerificationViewModel";
 import {ViewModel} from "../ViewModel";
 import {RoomRouter} from "../../matrix/workspace/RoomRouter.js";
+import {WorkspaceRoomMap} from "../../matrix/workspace/WorkspaceRoomMap.js";
 import {RoomViewModelObservable} from "./RoomViewModelObservable.js";
 import {RightPanelViewModel} from "./rightpanel/RightPanelViewModel.js";
 import {SyncStatus} from "../../matrix/Sync.js";
@@ -42,7 +43,15 @@ export class SessionViewModel extends ViewModel {
             reconnector: client.reconnector,
             session: client.session,
         })));
-        this._leftPanelViewModel = this.track(new LeftPanelViewModel(this.childOptions({session: this._client.session})));
+        // one list across the workspace's connections, each room from its owner
+        this._leftPanelViewModel = this.track(new LeftPanelViewModel(this.childOptions({
+            roomLists: connections ? {
+                rooms: new WorkspaceRoomMap(this._roomRouter, s => s.rooms),
+                invites: new WorkspaceRoomMap(this._roomRouter, s => s.invites),
+                roomsBeingCreated: new WorkspaceRoomMap(this._roomRouter, s => s.roomsBeingCreated, {byOwner: false}),
+            } : undefined,
+            session: this._client.session,
+        })));
         this._settingsViewModel = null;
         this._roomViewModelObservable = null;
         this._gridViewModel = null;

@@ -140,14 +140,21 @@ export class WorkspaceStorage {
 
     /** Record which connection owns a room. Owning by the source connection removes the override. */
     setRoomOwner(workspaceId, roomId, connectionId) {
+        return this.setRoomOwners(workspaceId, [roomId], connectionId);
+    }
+
+    /** `setRoomOwner` for several rooms in one write. */
+    setRoomOwners(workspaceId, roomIds, connectionId) {
         return this._mutateWorkspace(workspaceId, record => {
             if (!record.connections.some(c => c.id === connectionId)) {
                 throw new Error(`workspace ${workspaceId} has no connection ${connectionId}`);
             }
-            if (connectionId === record.sourceConnectionId) {
-                delete record.rooms[roomId];
-            } else {
-                record.rooms[roomId] = connectionId;
+            for (const roomId of roomIds) {
+                if (connectionId === record.sourceConnectionId) {
+                    delete record.rooms[roomId];
+                } else {
+                    record.rooms[roomId] = connectionId;
+                }
             }
         });
     }

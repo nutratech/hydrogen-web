@@ -45,6 +45,7 @@ export class WorkspaceConnections {
         this._clients = new Map();
         this._statuses = new Map([[workspace.sourceConnectionId, {status: ConnectionStatus.Ready}]]);
         this._listeners = new Set();
+        this._claimSubscriptions = new Map();
         this._disposed = false;
         this.roomRouter = new RoomRouter({workspace, workspaceStorage, sessions: this._sessions, newRoomsOnDestination});
     }
@@ -135,10 +136,16 @@ export class WorkspaceConnections {
                 if (status === LoadStatus.Ready) {
                     settled = true;
                     unsubscribe();
-                    if (!this._disposed) {
-                        this._sessions.set(connectionId, client.session);
-                        this._setStatus(connectionId, {status: ConnectionStatus.Ready});
-                        this.roomRouter.notifySessionsChanged();
+                    try {
+                        if (!this._disposed) {
+                            this._claimRoomsOf(connectionId, client.session);
+                            this._sessions.set(connectionId, client.session);
+                            this._setStatus(connectionId, {status: ConnectionStatus.Ready});
+                            this.roomRouter.notifyChanged();
+                        }
+                    } catch (error) {
+                        // never leave a connection starting forever
+                        this._setStatus(connectionId, {status: ConnectionStatus.Unavailable, error});
                     }
                     resolve();
                 } else if (status === LoadStatus.Error || status === LoadStatus.LoginFailed) {
@@ -165,13 +172,40 @@ export class WorkspaceConnections {
         if (this._disposed) {
             return;
         }
-        if (status.status !== ConnectionStatus.Ready && this._sessions.delete(connectionId)) {
-            this.roomRouter.notifySessionsChanged();
+        if (status.status !== ConnectionStatus.Ready) {
+            this._claimSubscriptions.get(connectionId)?.();
+            this._claimSubscriptions.delete(connectionId);
+            if (this._sessions.delete(connectionId)) {
+                this.roomRouter.notifyChanged();
+            }
         }
         this._statuses.set(connectionId, status);
         for (const listener of [...this._listeners]) {
             listener(connectionId, status);
         }
+    }
+
+    /**
+     * Give a secondary connection the rooms and invites only it holds, now and
+     * as they arrive (joined, created or invited there). A room the source
+     * also holds stays the source's; see `RoomRouter.unclaimedRoomIds`.
+     */
+    _claimRoomsOf(connectionId, session) {
+        const claim = roomIds => {
+            const unclaimed = this.roomRouter.unclaimedRoomIds(connectionId, roomIds);
+            if (unclaimed.length) {
+                this.roomRouter.claimRooms(unclaimed, connectionId);
+            }
+        };
+        claim([...session.rooms.keys(), ...session.invites.keys()]);
+        const handler = {
+            onAdd: key => claim([key]),
+            onUpdate() {},
+            onRemove() {},
+            onReset() {},
+        };
+        const unsubscribes = [session.rooms.subscribe(handler), session.invites.subscribe(handler)];
+        this._claimSubscriptions.set(connectionId, () => unsubscribes.forEach(unsubscribe => unsubscribe()));
     }
 
     _assertNotDisposed() {
@@ -183,6 +217,10 @@ export class WorkspaceConnections {
     /** Stop and release every secondary client. The source client belongs to its view model. */
     dispose() {
         this._disposed = true;
+        for (const unsubscribe of this._claimSubscriptions.values()) {
+            unsubscribe();
+        }
+        this._claimSubscriptions.clear();
         for (const client of this._clients.values()) {
             client.dispose();
         }

@@ -7,6 +7,7 @@ import {RoomRouter} from "./RoomRouter.js";
 import {WorkspaceStorage} from "./WorkspaceStorage.js";
 import {RoomViewModelObservable} from "../../domain/session/RoomViewModelObservable.js";
 import {ObservableValue} from "../../observable/value";
+import {ObservableMap} from "../../observable";
 import {RoomStatus} from "../room/common";
 
 function memoryBacking() {
@@ -16,11 +17,11 @@ function memoryBacking() {
 
 /** A session that holds room `!r` (tagged with `name`) and optionally a room being created. */
 function fakeSession(name, {localId} = {}) {
-    const rooms = new Map([["!r", {id: "!r", from: name}]]);
+    const rooms = new ObservableMap([["!r", {id: "!r", from: name}]]);
     return {
         name,
         rooms,
-        invites: new Map(),
+        invites: new ObservableMap(),
         roomsBeingCreated: new Map(localId ? [[localId, {id: localId, from: name}]] : []),
         observed: [],
         async observeRoomStatus(id) {

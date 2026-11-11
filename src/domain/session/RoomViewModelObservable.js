@@ -30,7 +30,9 @@ export class RoomViewModelObservable extends ObservableValue {
     constructor(sessionViewModel, roomIdOrLocalId) {
         super(null);
         this._statusSubscription = null;
-        this._sessionsSubscription = null;
+        this._routerSubscription = null;
+        this._routedSession = undefined;
+        this._disposed = false;
         this._sessionViewModel = sessionViewModel;
         this.id = roomIdOrLocalId;
     }
@@ -42,28 +44,43 @@ export class RoomViewModelObservable extends ObservableValue {
     are called in that case.
     */
     async initialize() {
+        // a connection coming or going, or the room changing owner, can change
+        // which session this room is shown from
+        this._routerSubscription = this._sessionViewModel.roomRouter.subscribeChanges(() => this._reroute());
+        await this._route();
+    }
+
+    async _route() {
         const session = this._session();
+        this._routedSession = session;
         if (!session) {
             // the owning connection is unavailable: fail closed rather than show
-            // another connection's copy of the room, say so, and look again
-            // when a connection's session arrives
+            // another connection's copy of the room, and say so
             this.set(this._sessionViewModel._createUnavailableRoomViewModel(this.id));
-            this._sessionsSubscription = this._sessionViewModel.roomRouter.subscribeSessions(() => {
-                if (this._session()) {
-                    this._sessionsSubscription = this._sessionsSubscription();
-                    this.get()?.dispose();
-                    this.initialize();
-                }
-            });
             return;
         }
         const statusObservable = await session.observeRoomStatus(this.id);
+        if (this._routedSession !== session || this._disposed) {
+            // rerouted (or disposed) while waiting
+            return;
+        }
         this.set(await this._statusToViewModel(statusObservable.get()));
         this._statusSubscription = statusObservable.subscribe(async status => {
             // first dispose existing VM, if any
             this.get()?.dispose();
             this.set(await this._statusToViewModel(status));
         });
+    }
+
+    _reroute() {
+        if (this._disposed || this._session() === this._routedSession) {
+            return;
+        }
+        if (this._statusSubscription) {
+            this._statusSubscription = this._statusSubscription();
+        }
+        this.get()?.dispose();
+        this._route();
     }
 
     /** The session for this ID: the one creating it (local IDs), else the room's owner. */
@@ -97,8 +114,9 @@ export class RoomViewModelObservable extends ObservableValue {
         if (this._statusSubscription) {
             this._statusSubscription = this._statusSubscription();
         }
-        if (this._sessionsSubscription) {
-            this._sessionsSubscription = this._sessionsSubscription();
+        this._disposed = true;
+        if (this._routerSubscription) {
+            this._routerSubscription = this._routerSubscription();
         }
         this.unsubscribeAll();
         this.get()?.dispose();
