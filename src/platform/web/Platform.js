@@ -10,6 +10,7 @@ import {createFetchRequest} from "./dom/request/fetch.js";
 import {xhrRequest} from "./dom/request/xhr.js";
 import {StorageFactory} from "../../matrix/storage/idb/StorageFactory";
 import {SessionInfoStorage} from "../../matrix/sessioninfo/localstorage/SessionInfoStorage";
+import {WorkspaceStorage, WORKSPACES_STORAGE_KEY} from "../../matrix/workspace/WorkspaceStorage.js";
 import {SettingsStorage} from "./dom/SettingsStorage.js";
 import {Encoding} from "./utils/Encoding.js";
 import {OlmWorker} from "../../matrix/e2ee/OlmWorker.js";
@@ -140,6 +141,11 @@ export class Platform {
         this._serviceWorkerHandler = null;
         this.sessionInfoStorage = new SessionInfoStorage(
             "hydrogen_sessions_v1"
+        );
+        this.workspaceStorage = new WorkspaceStorage(
+            WORKSPACES_STORAGE_KEY,
+            localStorage,
+            () => Math.floor(this.random() * Number.MAX_SAFE_INTEGER).toString(),
         );
         if (assetPaths.serviceWorker && "serviceWorker" in navigator) {
             this._serviceWorkerHandler = new ServiceWorkerHandler(

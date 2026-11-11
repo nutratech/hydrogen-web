@@ -14,6 +14,7 @@ import {LogoutViewModel} from "./LogoutViewModel";
 import {ForcedLogoutViewModel} from "./ForcedLogoutViewModel";
 import {SessionPickerViewModel} from "./SessionPickerViewModel.js";
 import {ViewModel} from "./ViewModel";
+import {isVisibleSessionInfo} from "../matrix/workspace/WorkspaceStorage.js";
 
 export class RootViewModel extends ViewModel {
     constructor(options) {
@@ -59,6 +60,12 @@ export class RootViewModel extends ViewModel {
                 this._showPicker();
             }
         } else if (sessionId) {
+            // a workspace's secondary connection is opened through its workspace, never on its own
+            const sourceSessionId = await this._sourceSessionIdForHidden(sessionId);
+            if (sourceSessionId) {
+                this.navigation.push("session", sourceSessionId);
+                return;
+            }
             if (!this._sessionViewModel || this._sessionViewModel.id !== sessionId) {
                 // see _showLogin for where _pendingClient comes from
                 if (this._pendingClient && this._pendingClient.sessionId === sessionId) {
@@ -83,7 +90,7 @@ export class RootViewModel extends ViewModel {
         else {
             try {
                 if (!(shouldRestoreLastUrl && this.urlRouter.tryRestoreLastUrl())) {
-                    const sessionInfos = await this.platform.sessionInfoStorage.getAll();
+                    const sessionInfos = (await this.platform.sessionInfoStorage.getAll()).filter(isVisibleSessionInfo);
                     if (sessionInfos.length === 0) {
                         this.navigation.push("login");
                     } else if (sessionInfos.length === 1) {
@@ -142,9 +149,27 @@ export class RootViewModel extends ViewModel {
         });
     }
 
+    /** For a hidden (secondary) session, the session that opens its workspace. */
+    async _sourceSessionIdForHidden(sessionId) {
+        const sessionInfo = await this.platform.sessionInfoStorage.get(sessionId);
+        if (!sessionInfo || isVisibleSessionInfo(sessionInfo)) {
+            return undefined;
+        }
+        const sourceSessionId = this.platform.workspaceStorage?.forSession(sessionId)?.sourceSessionId;
+        return sourceSessionId !== sessionId ? sourceSessionId : undefined;
+    }
+
     _showSession(client) {
+        let workspace;
+        try {
+            // created lazily on first open, never from the picker
+            workspace = this.platform.workspaceStorage?.ensureForSession(client.sessionId);
+        } catch (err) {
+            this._setSection(() => this._error = err);
+            return;
+        }
         this._setSection(() => {
-            this._sessionViewModel = new SessionViewModel(this.childOptions({client}));
+            this._sessionViewModel = new SessionViewModel(this.childOptions({client, workspace}));
             this._sessionViewModel.start();
         });
     }

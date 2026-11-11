@@ -28,8 +28,10 @@ import {ToastCollectionViewModel} from "./toast/ToastCollectionViewModel";
 export class SessionViewModel extends ViewModel {
     constructor(options) {
         super(options);
-        const {client} = options;
+        const {client, workspace} = options;
         this._client = this.track(client);
+        // references the workspace record; RootViewModel owns the client lifecycles
+        this._workspace = workspace;
         this._sessionStatusViewModel = this.track(new SessionStatusViewModel(this.childOptions({
             sync: client.sync,
             reconnector: client.reconnector,
@@ -124,6 +126,11 @@ export class SessionViewModel extends ViewModel {
                 }
             }
         }));
+    }
+
+    /** The workspace this session opens; room ownership lives there. */
+    get workspace() {
+        return this._workspace;
     }
 
     get id() {
