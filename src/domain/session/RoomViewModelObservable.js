@@ -44,7 +44,8 @@ export class RoomViewModelObservable extends ObservableValue {
         const session = this._session();
         if (!session) {
             // the owning connection is unavailable: fail closed rather than show
-            // another connection's copy of the room
+            // another connection's copy of the room, and say so
+            this.set(this._sessionViewModel._createUnavailableRoomViewModel(this.id));
             return;
         }
         const statusObservable = await session.observeRoomStatus(this.id);

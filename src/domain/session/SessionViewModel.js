@@ -10,6 +10,7 @@ Please see LICENSE files in the repository root for full details.
 import {LeftPanelViewModel} from "./leftpanel/LeftPanelViewModel.js";
 import {RoomViewModel} from "./room/RoomViewModel.js";
 import {UnknownRoomViewModel} from "./room/UnknownRoomViewModel.js";
+import {UnavailableRoomViewModel} from "./room/UnavailableRoomViewModel.js";
 import {InviteViewModel} from "./room/InviteViewModel.js";
 import {RoomBeingCreatedViewModel} from "./room/RoomBeingCreatedViewModel.js";
 import {LightboxViewModel} from "./room/LightboxViewModel.js";
@@ -31,8 +32,6 @@ export class SessionViewModel extends ViewModel {
         super(options);
         const {client, workspace} = options;
         this._client = this.track(client);
-        // references the workspace record; RootViewModel owns the client lifecycles
-        this._workspace = workspace;
         // which session owns each room; only the source connection exists until step 5
         this._roomRouter = new RoomRouter(workspace ? {
             workspace,
@@ -137,7 +136,8 @@ export class SessionViewModel extends ViewModel {
 
     /** The workspace this session opens; room ownership lives there. */
     get workspace() {
-        return this._workspace;
+        // the router holds the current record; claiming a room replaces it
+        return this._roomRouter.workspace;
     }
 
     get id() {
@@ -263,6 +263,10 @@ export class SessionViewModel extends ViewModel {
             roomIdOrAlias,
             session: this._roomRouter.sessionForNewRooms(),
         }));
+    }
+
+    _createUnavailableRoomViewModel(roomId) {
+        return new UnavailableRoomViewModel(this.childOptions({roomId}));
     }
 
     async _createArchivedRoomViewModel(roomId) {

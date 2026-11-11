@@ -118,15 +118,17 @@ export function tests() {
             assert.deepEqual(created, ["!r"]);
             observable.dispose();
         },
-        "the room observable stays empty when the owner is unavailable": async assert => {
+        "the room observable says the room is unavailable when its owner is": async assert => {
             const {workspace, workspaceStorage} = twoConnectionWorkspace();
             const source = fakeSession("source");
             workspaceStorage.setRoomOwner(workspace.id, "!r", "dest");
             const roomRouter = new RoomRouter({workspace: workspaceStorage.get(workspace.id), workspaceStorage,
                 sessions: new Map([[workspace.sourceConnectionId, source]])});
-            const observable = new RoomViewModelObservable({roomRouter}, "!r");
+            const sessionViewModel = {roomRouter, _createUnavailableRoomViewModel: roomId => ({kind: "unavailable", roomId, dispose() {}})};
+            const observable = new RoomViewModelObservable(sessionViewModel, "!r");
             await observable.initialize();
-            assert.equal(observable.get(), null);
+            assert.equal(observable.get().kind, "unavailable");
+            assert.equal(observable.get().roomId, "!r");
             assert.deepEqual(source.observed, []);
             observable.dispose();
         },
