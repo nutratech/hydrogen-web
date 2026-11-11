@@ -14,6 +14,7 @@ const loadTimeoutMs = 30000;
 let initializedSource;
 // The in-flight underlying init(), shared by every verifier instance.
 let initializing;
+let waiters = 0;
 let wasmInitialized = false;
 
 function canonicalJson(value) {
@@ -97,18 +98,21 @@ export class CygnusVerifier {
             }
         }
         const {promise, abort} = initializing;
+        waiters += 1;
         let timeout;
         const attempt = Promise.race([
             promise,
             new Promise((_, reject) => {
                 timeout = setTimeout(() => {
-                    abort();
+                    // the initialization is shared: only cancel it when no other caller still waits on it
+                    if (waiters <= 1) abort();
                     reject(new Error("cygnus wasm initialization timed out"));
                 }, loadTimeoutMs);
             }),
         ]).then(() => {
             this._loaded = true;
         }).finally(() => {
+            waiters -= 1;
             clearTimeout(timeout);
             if (this._ready === attempt) this._ready = undefined;
         });

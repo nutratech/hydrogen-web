@@ -40,7 +40,10 @@ export function isVisibleSessionInfo(sessionInfo, workspaceStorage) {
     if (!sessionInfo?.hidden) {
         return true;
     }
-    return !workspaceStorage?.forSession(sessionInfo.id);
+    // only a destination connection is hidden; a hidden session that is (or became) a
+    // workspace's source, or that no workspace references, can be opened on its own
+    const connection = workspaceStorage?.forSession(sessionInfo.id)?.connectionForSession(sessionInfo.id);
+    return connection?.role !== "destination";
 }
 
 function isValidRecord(id, record) {

@@ -227,6 +227,11 @@ export class Client {
         const hsApi = new HomeServerApi({homeserver: loginMethod.homeserver, request: this._platform.request});
         const response = await loginMethod.login(hsApi, "Hydrogen", log, deviceId);
         if (response.device_id !== deviceId) {
+            // the server created a session for another device; end it rather than leave it live
+            try {
+                await new HomeServerApi({homeserver: loginMethod.homeserver, accessToken: response.access_token,
+                    request: this._platform.request}).logout({log}).response();
+            } catch (err) {} // eslint-disable-line no-empty
             throw new Error(`homeserver assigned device ID ${response.device_id || "(none)"}; expected ${deviceId}`);
         }
         if (typeof response.user_id !== "string" || typeof response.access_token !== "string") {

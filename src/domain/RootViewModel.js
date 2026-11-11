@@ -63,7 +63,13 @@ export class RootViewModel extends ViewModel {
         } else if (sessionId) {
             const navigationSessionId = sessionId;
             // a workspace's secondary connection is opened through its workspace, never on its own
-            const sourceSessionId = await this._sourceSessionIdForHidden(sessionId);
+            let sourceSessionId;
+            try {
+                sourceSessionId = await this._sourceSessionIdForHidden(sessionId);
+            } catch (err) {
+                this._setSection(() => this._error = err);
+                return;
+            }
             if (this.navigation.path.get("session")?.value !== navigationSessionId) {
                 return;
             }
@@ -187,6 +193,8 @@ export class RootViewModel extends ViewModel {
                 });
             }
         } catch (err) {
+            // the loaders gave up ownership of the client
+            client.dispose();
             this._setSection(() => this._error = err);
             return;
         }

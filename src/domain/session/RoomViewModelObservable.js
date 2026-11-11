@@ -109,8 +109,11 @@ export class RoomViewModelObservable extends ObservableValue {
     async _statusToViewModel(status) {
         if (status & RoomStatus.Replaced) {
             if (status & RoomStatus.BeingCreated) {
-                const roomBeingCreated = this._session().roomsBeingCreated.get(this.id);
-                this._sessionViewModel.notifyRoomReplaced(roomBeingCreated.id, roomBeingCreated.roomId);
+                // the session may be gone by now; the route re-resolves when it comes back
+                const roomBeingCreated = (this._routedSession ?? this._session())?.roomsBeingCreated.get(this.id);
+                if (roomBeingCreated) {
+                    this._sessionViewModel.notifyRoomReplaced(roomBeingCreated.id, roomBeingCreated.roomId);
+                }
             } else {
                 throw new Error("Don't know how to replace a room with this status: " + (status ^ RoomStatus.Replaced));
             }
