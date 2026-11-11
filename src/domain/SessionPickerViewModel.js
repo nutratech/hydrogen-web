@@ -71,7 +71,8 @@ export class SessionPickerViewModel extends ViewModel {
 
     // this loads all the sessions
     async load() {
-        const sessions = (await this.platform.sessionInfoStorage.getAll()).filter(isVisibleSessionInfo);
+        const sessions = (await this.platform.sessionInfoStorage.getAll())
+            .filter(s => isVisibleSessionInfo(s, this.platform.workspaceStorage));
         this._sessions.setManyUnsorted(sessions.map(s => {
             return new SessionItemViewModel(this.childOptions({sessionInfo: s}), this);
         }));

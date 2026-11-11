@@ -41,7 +41,12 @@ export class RoomViewModelObservable extends ObservableValue {
     are called in that case.
     */
     async initialize() {
-        const {session} = this._sessionViewModel._client;
+        const session = this._session();
+        if (!session) {
+            // the owning connection is unavailable: fail closed rather than show
+            // another connection's copy of the room
+            return;
+        }
         const statusObservable = await session.observeRoomStatus(this.id);
         this.set(await this._statusToViewModel(statusObservable.get()));
         this._statusSubscription = statusObservable.subscribe(async status => {
@@ -51,11 +56,16 @@ export class RoomViewModelObservable extends ObservableValue {
         });
     }
 
+    /** The session for this ID: the one creating it (local IDs), else the room's owner. */
+    _session() {
+        const router = this._sessionViewModel.roomRouter;
+        return router.sessionForLocalId(this.id) ?? router.sessionForRoom(this.id);
+    }
+
     async _statusToViewModel(status) {
         if (status & RoomStatus.Replaced) {
             if (status & RoomStatus.BeingCreated) {
-                const {session} = this._sessionViewModel._client;
-                const roomBeingCreated = session.roomsBeingCreated.get(this.id);
+                const roomBeingCreated = this._session().roomsBeingCreated.get(this.id);
                 this._sessionViewModel.notifyRoomReplaced(roomBeingCreated.id, roomBeingCreated.roomId);
             } else {
                 throw new Error("Don't know how to replace a room with this status: " + (status ^ RoomStatus.Replaced));

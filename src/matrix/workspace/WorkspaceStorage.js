@@ -30,9 +30,27 @@ Please see LICENSE files in the repository root for full details.
 export const WORKSPACES_STORAGE_KEY = "hydrogen_workspaces_v1";
 const VERSION = 1;
 
-/** Sessions that belong to a workspace as a secondary connection are not listed on their own. */
-export function isVisibleSessionInfo(sessionInfo) {
-    return !sessionInfo?.hidden;
+/**
+ * Sessions that belong to a workspace as a secondary connection are not listed
+ * on their own. A hidden session that no workspace references (the two stores
+ * drifted, e.g. a workspace was removed but its session info was not) is shown
+ * again, so the user can still open or log out of it.
+ */
+export function isVisibleSessionInfo(sessionInfo, workspaceStorage) {
+    if (!sessionInfo?.hidden) {
+        return true;
+    }
+    return !workspaceStorage?.forSession(sessionInfo.id);
+}
+
+function isValidRecord(id, record) {
+    return record?.id === id &&
+        typeof record.sourceConnectionId === "string" &&
+        Array.isArray(record.connections) &&
+        record.connections.every(c => typeof c?.id === "string" &&
+            (c.role === "source" || c.role === "destination") && typeof c.sessionId === "string") &&
+        record.connections.some(c => c.id === record.sourceConnectionId && c.role === "source") &&
+        record.rooms !== null && typeof record.rooms === "object" && !Array.isArray(record.rooms);
 }
 
 export class Workspace {
@@ -176,6 +194,11 @@ export class WorkspaceStorage {
         const data = JSON.parse(json);
         if (data?.version !== VERSION || !data.workspaces || typeof data.workspaces !== "object") {
             throw new Error(`unsupported workspace storage (version ${data?.version})`);
+        }
+        for (const [id, record] of Object.entries(data.workspaces)) {
+            if (!isValidRecord(id, record)) {
+                throw new Error(`corrupt workspace record ${id}`);
+            }
         }
         return data;
     }

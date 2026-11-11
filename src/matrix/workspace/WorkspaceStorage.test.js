@@ -69,9 +69,23 @@ export function tests() {
             assert.throws(() => storage(backing).ensureForSession("s1"), /unsupported workspace storage/);
             assert.equal(backing.items.get("ws"), newer);
         },
-        "hidden sessions are not listed": assert => {
-            assert.equal(isVisibleSessionInfo({id: "s1"}), true);
-            assert.equal(isVisibleSessionInfo({id: "s2", hidden: true}), false);
+        "hidden sessions are not listed unless no workspace references them": assert => {
+            const backing = memoryBacking();
+            const workspaces = storage(backing);
+            const workspace = workspaces.ensureForSession("s1");
+            const record = JSON.parse(backing.items.get("ws"));
+            record.workspaces[workspace.id].connections.push({id: "dest", role: "destination", sessionId: "s2"});
+            backing.setItem("ws", JSON.stringify(record));
+            assert.equal(isVisibleSessionInfo({id: "s1"}, workspaces), true);
+            assert.equal(isVisibleSessionInfo({id: "s2", hidden: true}, workspaces), false);
+            assert.equal(isVisibleSessionInfo({id: "orphan", hidden: true}, workspaces), true);
+        },
+        "a corrupt record is refused with a clear error": assert => {
+            const corrupt = JSON.stringify({version: 1, workspaces: {x: {}}});
+            const backing = memoryBacking({ws: corrupt});
+            assert.throws(() => storage(backing).forSession("s1"), /corrupt workspace record x/);
+            assert.throws(() => storage(backing).ensureForSession("s1"), /corrupt workspace record x/);
+            assert.equal(backing.items.get("ws"), corrupt);
         },
     };
 }

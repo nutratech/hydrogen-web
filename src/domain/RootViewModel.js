@@ -90,7 +90,8 @@ export class RootViewModel extends ViewModel {
         else {
             try {
                 if (!(shouldRestoreLastUrl && this.urlRouter.tryRestoreLastUrl())) {
-                    const sessionInfos = (await this.platform.sessionInfoStorage.getAll()).filter(isVisibleSessionInfo);
+                    const sessionInfos = (await this.platform.sessionInfoStorage.getAll())
+                        .filter(s => isVisibleSessionInfo(s, this.platform.workspaceStorage));
                     if (sessionInfos.length === 0) {
                         this.navigation.push("login");
                     } else if (sessionInfos.length === 1) {
@@ -152,7 +153,8 @@ export class RootViewModel extends ViewModel {
     /** For a hidden (secondary) session, the session that opens its workspace. */
     async _sourceSessionIdForHidden(sessionId) {
         const sessionInfo = await this.platform.sessionInfoStorage.get(sessionId);
-        if (!sessionInfo || isVisibleSessionInfo(sessionInfo)) {
+        // a hidden session no workspace references is visible again (see isVisibleSessionInfo)
+        if (!sessionInfo || isVisibleSessionInfo(sessionInfo, this.platform.workspaceStorage)) {
             return undefined;
         }
         const sourceSessionId = this.platform.workspaceStorage?.forSession(sessionId)?.sourceSessionId;

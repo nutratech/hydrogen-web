@@ -20,6 +20,7 @@ import {CreateRoomViewModel} from "./CreateRoomViewModel.js";
 import {JoinRoomViewModel} from "./JoinRoomViewModel";
 import {DeviceVerificationViewModel} from "./verification/DeviceVerificationViewModel";
 import {ViewModel} from "../ViewModel";
+import {RoomRouter} from "../../matrix/workspace/RoomRouter.js";
 import {RoomViewModelObservable} from "./RoomViewModelObservable.js";
 import {RightPanelViewModel} from "./rightpanel/RightPanelViewModel.js";
 import {SyncStatus} from "../../matrix/Sync.js";
@@ -32,6 +33,12 @@ export class SessionViewModel extends ViewModel {
         this._client = this.track(client);
         // references the workspace record; RootViewModel owns the client lifecycles
         this._workspace = workspace;
+        // which session owns each room; only the source connection exists until step 5
+        this._roomRouter = new RoomRouter(workspace ? {
+            workspace,
+            workspaceStorage: this.platform.workspaceStorage,
+            sessions: new Map([[workspace.sourceConnectionId, client.session]]),
+        } : {session: client.session});
         this._sessionStatusViewModel = this.track(new SessionStatusViewModel(this.childOptions({
             sync: client.sync,
             reconnector: client.reconnector,
@@ -235,10 +242,15 @@ export class SessionViewModel extends ViewModel {
         }
     }
 
+    get roomRouter() {
+        return this._roomRouter;
+    }
+
     _createRoomViewModelInstance(roomId) {
-        const room = this._client.session.rooms.get(roomId);
+        const session = this._roomRouter.sessionForRoom(roomId);
+        const room = session?.rooms.get(roomId);
         if (room) {
-            const roomVM = new RoomViewModel(this.childOptions({room, session: this._client.session}));
+            const roomVM = new RoomViewModel(this.childOptions({room, session}));
             roomVM.load();
             return roomVM;
         }
@@ -246,16 +258,18 @@ export class SessionViewModel extends ViewModel {
     }
 
     _createUnknownRoomViewModel(roomIdOrAlias) {
+        // joining it happens on the connection new rooms go to
         return new UnknownRoomViewModel(this.childOptions({
             roomIdOrAlias,
-            session: this._client.session,
+            session: this._roomRouter.sessionForNewRooms(),
         }));
     }
 
     async _createArchivedRoomViewModel(roomId) {
-        const room = await this._client.session.loadArchivedRoom(roomId);
+        const session = this._roomRouter.sessionForRoom(roomId);
+        const room = await session?.loadArchivedRoom(roomId);
         if (room) {
-            const roomVM = new RoomViewModel(this.childOptions({room, session: this._client.session}));
+            const roomVM = new RoomViewModel(this.childOptions({room, session}));
             roomVM.load();
             return roomVM;
         }
@@ -263,22 +277,24 @@ export class SessionViewModel extends ViewModel {
     }
 
     _createInviteViewModel(roomId) {
-        const invite = this._client.session.invites.get(roomId);
+        const session = this._roomRouter.sessionForRoom(roomId);
+        const invite = session?.invites.get(roomId);
         if (invite) {
             return new InviteViewModel(this.childOptions({
                 invite,
-                mediaRepository: this._client.session.mediaRepository,
+                mediaRepository: session.mediaRepository,
             }));
         }
         return null;
     }
 
     _createRoomBeingCreatedViewModel(localId) {
-        const roomBeingCreated = this._client.session.roomsBeingCreated.get(localId);
+        const session = this._roomRouter.sessionForLocalId(localId);
+        const roomBeingCreated = session?.roomsBeingCreated.get(localId);
         if (roomBeingCreated) {
             return new RoomBeingCreatedViewModel(this.childOptions({
                 roomBeingCreated,
-                mediaRepository: this._client.session.mediaRepository,
+                mediaRepository: session.mediaRepository,
             }));
         }
         return null;
@@ -326,7 +342,7 @@ export class SessionViewModel extends ViewModel {
             this._createRoomViewModel = this.disposeTracked(this._createRoomViewModel);
         }
         if (createRoomOpen) {
-            this._createRoomViewModel = this.track(new CreateRoomViewModel(this.childOptions({session: this._client.session})));
+            this._createRoomViewModel = this.track(new CreateRoomViewModel(this.childOptions({session: this._roomRouter.sessionForNewRooms()})));
         }
         this.emitChange("activeMiddleViewModel");
     }
@@ -336,7 +352,7 @@ export class SessionViewModel extends ViewModel {
             this._joinRoomViewModel = this.disposeTracked(this._joinRoomViewModel);
         }
         if (joinRoomOpen) {
-            this._joinRoomViewModel = this.track(new JoinRoomViewModel(this.childOptions({session: this._client.session})));
+            this._joinRoomViewModel = this.track(new JoinRoomViewModel(this.childOptions({session: this._roomRouter.sessionForNewRooms()})));
         }
         this.emitChange("activeMiddleViewModel");
     }
@@ -369,16 +385,17 @@ export class SessionViewModel extends ViewModel {
 
     _roomFromNavigation() {
         const roomId = this.navigation.path.get("room")?.value;
-        const room = this._client.session.rooms.get(roomId);
-        return room;
+        return this._roomRouter.sessionForRoom(roomId)?.rooms.get(roomId);
     }
 
     _updateRightPanel() {
         this._rightPanelViewModel = this.disposeTracked(this._rightPanelViewModel);
         const enable = !!this.navigation.path.get("right-panel")?.value;
         if (enable) {
-            const room = this._roomFromNavigation();
-            this._rightPanelViewModel = this.track(new RightPanelViewModel(this.childOptions({room, session: this._client.session})));
+            const roomId = this.navigation.path.get("room")?.value;
+            const session = this._roomRouter.sessionForRoom(roomId);
+            const room = session?.rooms.get(roomId);
+            this._rightPanelViewModel = this.track(new RightPanelViewModel(this.childOptions({room, session})));
         }
         this.emitChange("rightPanelViewModel");
     }

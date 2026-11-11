@@ -169,3 +169,12 @@ after the Node 18 suite and both lints pass.
   the device is not revoked.
 - A room both accounts are in stays owned by the source. Whether the user can
   choose to switch it is a later UI decision.
+- The service worker currently stores one `{homeserver, accessToken}` pair,
+  updated by `Client._loadSessionInfo`, and only attaches that token for
+  requests to that origin. With two connections, the last-loaded client would
+  replace the other's credentials. Step 5 must provide per-connection auth
+  data or another safe request-auth lookup so media and other service-worker
+  requests work for both homeservers.
+- Both sync streams can report notifications for a room around ownership
+  transfer. Step 5 must filter notifications by the persisted room owner and
+  avoid duplicate or stale notifications from the former owner.
