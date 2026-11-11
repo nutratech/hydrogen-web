@@ -30,6 +30,7 @@ const SERVER_A_LINKS = [
 ];
 const SERVER_B_GENESIS = "AQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA1X_O2HVJ_0X5Qxn2KAplUg_89nXNprGMHNy69KOtjdtBKsjJ0K7SrOhNovUYV5ObQIkq3GgFrr4UgozLJd4c3ABJzZWNvbmQuZXhhbXBsZS5uZXRRDEmMbnKpYv8QouxBnJrVvVlWT9cZ_Gi9Ode0mURfhnFMHqeE8qHdpX0CCZzeSq7MTuSJ7yTVB4urXrZ4o4sH";
 const ROOM_ID = "!room";
+const ROOM_ID_2 = "!room2";
 
 function fromBase64Url(value) {
     return Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
@@ -315,7 +316,7 @@ export function tests() {
             const encryptedBundle = await sourceService.prepareMoveHandoff({
                 custodian: serverB,
                 displayUserId: "@alice:second.example.net",
-                roomIds: [ROOM_ID, ROOM_ID],
+                roomIds: [ROOM_ID, ROOM_ID_2],
                 passphrase,
             });
             assert.equal(identity.isRetired, true);
@@ -350,15 +351,19 @@ export function tests() {
             assert.equal(identity.isRetired, true);
             assert.equal(identity.pendingMoveBundle, undefined);
             assert.equal(storage.values.get(IDENTITY_SESSION_KEY).rotationSeed, undefined);
-            // A confirmed destination join seeds the new device's room floor.
+            // A confirmed destination join seeds the new device's room floors.
             await destinationService.resumeMoveRebinds();
-            assert.equal(sent.length, 1);
-            assert.equal(sent[0].type, "m.room.member");
-            assert.equal(sent[0].content.custodian, serverB);
-            assert.equal(sent[0].device_certificate.device_id, "DESTINATION");
+            assert.deepEqual(sent.map(event => event.room_id).sort(), [ROOM_ID, ROOM_ID_2].sort());
+            for (const event of sent) {
+                assert.equal(event.type, "m.room.member");
+                assert.equal(event.content.custodian, serverB);
+                assert.equal(event.device_certificate.device_id, "DESTINATION");
+            }
             assert.deepEqual(drafts[0].via, ["chat.example.org"]);
-            const floorKey = JSON.stringify([USER_U, "DESTINATION", ROOM_ID]);
-            assert.equal(destinationStorage.values.get(FLOORS_SESSION_KEY)[floorKey], crypto.eventId(sent[0]).eventId);
+            for (const roomId of [ROOM_ID, ROOM_ID_2]) {
+                const floorKey = JSON.stringify([USER_U, "DESTINATION", roomId]);
+                assert.equal(destinationStorage.values.get(FLOORS_SESSION_KEY)[floorKey], crypto.eventId(sent.find(event => event.room_id === roomId)).eventId);
+            }
             assert.equal(movedIdentity.pendingRebindRoomIds.length, 0);
         },
         "move retry certifies the destination before retiring the source": async assert => {

@@ -75,6 +75,12 @@ export function tests() {
             assert.throws(() => storage(backing).ensureForSession("s1"), /unsupported workspace storage/);
             assert.equal(backing.items.get("ws"), newer);
         },
+        "an array of workspaces is refused, not written as a non-index property": assert => {
+            const array = JSON.stringify({version: 1, workspaces: []});
+            const backing = memoryBacking({ws: array});
+            assert.throws(() => storage(backing).ensureForSession("s1"), /unsupported workspace storage/);
+            assert.equal(backing.items.get("ws"), array);
+        },
         "hidden sessions are not listed unless no workspace references them": assert => {
             const backing = memoryBacking();
             const workspaces = storage(backing);

@@ -100,6 +100,17 @@ export function tests() {
             assert.equal(workspaceStorage.get(workspace.id).ownerOf("!r"), workspace.sourceConnectionId);
             assert.deepEqual(JSON.parse(backing.items.get("ws")).workspaces[workspace.id].rooms, {});
         },
+        "claiming a room writes through a stale cached owner": assert => {
+            const {workspace, workspaceStorage, backing} = twoConnectionWorkspace();
+            const router = new RoomRouter({workspace, workspaceStorage, sessions: new Map()});
+            router.claimRoom("!r", "dest");
+            // another tab moved the room back to the source behind this router's back
+            const record = JSON.parse(backing.items.get("ws"));
+            delete record.workspaces[workspace.id].rooms["!r"];
+            backing.setItem("ws", JSON.stringify(record));
+            router.claimRoom("!r", "dest");
+            assert.equal(JSON.parse(backing.items.get("ws")).workspaces[workspace.id].rooms["!r"], "dest");
+        },
         "without a workspace every room routes to the one session": assert => {
             const session = fakeSession("only");
             const router = new RoomRouter({session});

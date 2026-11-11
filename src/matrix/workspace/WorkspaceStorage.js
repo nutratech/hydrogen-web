@@ -236,7 +236,7 @@ export class WorkspaceStorage {
             return {version: VERSION, workspaces: {}};
         }
         const data = JSON.parse(json);
-        if (data?.version !== VERSION || !data.workspaces || typeof data.workspaces !== "object") {
+        if (data?.version !== VERSION || !data.workspaces || typeof data.workspaces !== "object" || Array.isArray(data.workspaces)) {
             throw new Error(`unsupported workspace storage (version ${data?.version})`);
         }
         for (const [id, record] of Object.entries(data.workspaces)) {

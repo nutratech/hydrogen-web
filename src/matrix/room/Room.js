@@ -81,7 +81,17 @@ export class Room extends BaseRoom {
         return false;
     }
 
-    async prepareSync(roomResponse, membership, newKeys, txn, log) {
+    async prepareSync(...args) {
+        try {
+            return await this._prepareSync(...args);
+        } catch (err) {
+            // a failed prepare must not leave this sync's own IDs behind
+            this._syncOwnUserIds = null;
+            throw err;
+        }
+    }
+
+    async _prepareSync(roomResponse, membership, newKeys, txn, log) {
         this._syncOwnUserIds = this._resolveOwnUserIds(roomResponse);
         log.set("id", this.id);
         if (newKeys) {
@@ -140,7 +150,17 @@ export class Room extends BaseRoom {
     }
 
     /** @package */
-    async writeSync(roomResponse, isInitialSync, {summaryChanges, decryptChanges, roomEncryption, retryEntries}, txn, log) {
+    async writeSync(...args) {
+        try {
+            return await this._writeSync(...args);
+        } catch (err) {
+            // `afterSync` will not run for a failed write; do not keep this sync's own IDs
+            this._syncOwnUserIds = null;
+            throw err;
+        }
+    }
+
+    async _writeSync(roomResponse, isInitialSync, {summaryChanges, decryptChanges, roomEncryption, retryEntries}, txn, log) {
         log.set("id", this.id);
         const isRejoin = summaryChanges.isNewJoin(this._summary.data);
         if (isRejoin) {
@@ -230,6 +250,14 @@ export class Room extends BaseRoom {
      * No storage or network operations should be done here.
      */
     afterSync(changes, log) {
+        try {
+            this._afterSync(changes, log);
+        } finally {
+            this._syncOwnUserIds = null;
+        }
+    }
+
+    _afterSync(changes, log) {
         const {
             summaryChanges, newEntries, updatedEntries, newLiveKey,
             removedPendingEvents, memberChanges, powerLevelsEvent,
@@ -297,7 +325,6 @@ export class Room extends BaseRoom {
             this._sendQueue.emitRemovals(removedPendingEvents);
         }
         this._emitSyncRoomState(roomResponse);
-        this._syncOwnUserIds = null;
     }
 
     _updateObservedMembers(memberChanges) {

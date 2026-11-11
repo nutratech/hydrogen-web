@@ -136,11 +136,12 @@ export class RoomRouter {
             return;
         }
         const changed = roomIds.filter(roomId => this._workspace.ownerOf(roomId) !== connectionId);
-        if (changed.length === 0) {
-            return;
+        // Write even when the cached record already names this owner: another tab may
+        // have changed it, and the write refreshes this router's snapshot.
+        this._workspace = this._workspaceStorage.setRoomOwners(this._workspace.id, roomIds, connectionId);
+        if (changed.length) {
+            this.notifyChanged();
         }
-        this._workspace = this._workspaceStorage.setRoomOwners(this._workspace.id, changed, connectionId);
-        this.notifyChanged();
     }
 
     /**
