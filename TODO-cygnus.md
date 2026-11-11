@@ -85,7 +85,7 @@ explicitly.
    destination confirms import. It includes:
     - the verified chain from genesis plus the signed move link;
     - the next rotation key, never the spent current key;
-    - the cross-signing master and self-signing private keys;
+    - the cross-signing master, self-signing and user-signing private keys;
     - revoked device IDs, plus this session's Cygnus device ID;
     - the joined Cygnus room IDs, and the old display ID's server for `via`.
 2. If the app stops after source retirement, it can release the same encrypted

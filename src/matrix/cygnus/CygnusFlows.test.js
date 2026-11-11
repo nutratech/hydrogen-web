@@ -437,6 +437,7 @@ export function tests() {
             });
             assert.equal(typeof published.masterSeed, "string");
             assert.equal(typeof published.selfSigningSeed, "string");
+            assert.equal(published.userSigningSeed, toStandard(USR_USK));
             assert.equal(destinationService.identity.get().deviceCertificate.device_id, "DESTINATION");
             assert.equal(identity.isRetired, true);
             assert.equal(identity.pendingMoveBundle, undefined);

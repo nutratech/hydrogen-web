@@ -303,9 +303,20 @@ export class CygnusService {
         if (!this._secretFetcher?.hasSecretStorage) {
             throw new Error("unlock destination secret storage before moving the Cygnus identity");
         }
+        // check everything that can be checked locally before changing the account's keys
+        if (this._crypto.publicKey(base64ToBase64Url(bundle.masterSeed)) !== bundle.record.masterKey) {
+            throw new Error("carried cross-signing master key does not match the principal");
+        }
+        let identity = this.identity.get();
+        if (identity && (identity.principal !== bundle.record.principal || !identity.isHandoffPending)) {
+            throw new Error("destination session already has a different or active Cygnus identity");
+        }
+        const earlyRotationKey = await this._secretFetcher.readSecretStorage("m.principal.rotation_key");
+        if (earlyRotationKey && base64ToBase64Url(earlyRotationKey) !== bundle.rotationKey) {
+            throw new Error("destination secret storage already contains a different rotation key");
+        }
         await this._publishDestinationCrossSigningKeys(bundle, requestPassword, publishKeys, log);
         await this._validateDestinationCrossSigningKeys(bundle, log);
-        let identity = this.identity.get();
         if (!identity) {
             const record = {
                 ...bundle.record,
@@ -429,19 +440,15 @@ export class CygnusService {
             log,
         };
         if (await hasPublishedCrossSigningKeys(expectedKeys)) return;
-        if (typeof requestPassword !== "function") {
-            throw new Error("publishing the carried cross-signing keys requires a password prompt");
-        }
         if (!this._crossSigningSigner) {
             throw new Error("Olm is unavailable for publishing the destination cross-signing keys");
         }
-        const password = await requestPassword();
         const seeds = {
             master: decodeBytes(seedStrings.master),
             self_signing: decodeBytes(seedStrings.self_signing),
             user_signing: decodeBytes(seedStrings.user_signing),
         };
-        await publishCrossSigningKeys({hsApi: this._hsApi, userId: this._userId, password, seeds,
+        await publishCrossSigningKeys({hsApi: this._hsApi, userId: this._userId, requestPassword, seeds,
             signer: this._crossSigningSigner, log});
     }
 

@@ -16,7 +16,7 @@ const HASHED_CACHED_ON_REQUEST_ASSETS = DEFINE_HASHED_CACHED_ON_REQUEST_ASSETS;
 
 const unhashedCacheName = `hydrogen-assets-${DEFINE_GLOBAL_HASH}`;
 const hashedCacheName = `hydrogen-assets`;
-const mediaThumbnailCacheName = `hydrogen-media-thumbnails-v2`;
+const mediaThumbnailCacheName = `hydrogen-media-thumbnails-v3`;
 
 self.addEventListener("install", function (e) {
     e.waitUntil(

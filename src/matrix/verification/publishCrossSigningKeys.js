@@ -73,7 +73,7 @@ function publishedKey(keys, userId) {
     return Object.values(keys?.[userId]?.keys || {});
 }
 
-/** True when the account already publishes exactly these master and self-signing keys. */
+/** True when the account already publishes these master, self-signing and (when given) user-signing keys. */
 export async function hasPublishedCrossSigningKeys({hsApi, userId, masterKey, selfSigningKey, userSigningKey, log}) {
     const response = await hsApi.queryKeys({device_keys: {[userId]: []}}, {log}).response();
     return publishedKey(response.master_keys, userId).includes(masterKey) &&
@@ -87,11 +87,11 @@ export async function hasPublishedCrossSigningKeys({hsApi, userId, masterKey, se
  * account password through user-interactive auth, then confirm with
  * `/keys/query` that the server now returns them.
  *
- * Does nothing when the account already publishes the same master and
+ * Does nothing when the account already publishes the same master,
  * self-signing and user-signing keys, so a retried move does not ask the server to replace
- * them. Throws when the server offers no password flow.
+ * them. `requestPassword` is called only if the server asks for it. Throws when the server offers no password flow.
  */
-export async function publishCrossSigningKeys({hsApi, userId, password, seeds, signer, log}) {
+export async function publishCrossSigningKeys({hsApi, userId, password, requestPassword, seeds, signer, log}) {
     const upload = buildCrossSigningUpload(userId, seeds, signer);
     const masterKey = signer.publicKey(seeds.master);
     const selfSigningKey = signer.publicKey(seeds.self_signing);
@@ -108,6 +108,10 @@ export async function publishCrossSigningKeys({hsApi, userId, password, seeds, s
         const flows = firstResponse.flows || [];
         if (!flows.some(flow => flow.stages?.length === 1 && flow.stages[0] === "m.login.password")) {
             throw new Error("the homeserver does not offer password authentication for publishing cross-signing keys");
+        }
+        // ask only now: a server that needs no authentication never prompts
+        if (password === undefined && typeof requestPassword === "function") {
+            password = await requestPassword();
         }
         const second = hsApi.uploadCrossSigningKeys({
             ...upload,
