@@ -232,9 +232,10 @@ export class CygnusService {
         }
         if (identity.hasPendingRotation) await identity.rotate({log});
         const allRooms = [...new Set([...(await this._joinedCygnusRoomIds()), ...roomIds])];
-        const [masterSeed, selfSigningSeed] = await Promise.all([
+        const [masterSeed, selfSigningSeed, userSigningSeed] = await Promise.all([
             this._secretFetcher.readSecretStorage("m.cross_signing.master"),
             this._secretFetcher.readSecretStorage("m.cross_signing.self_signing"),
+            this._secretFetcher.readSecretStorage("m.cross_signing.user_signing"),
         ]);
         if (!masterSeed || !selfSigningSeed || this._crypto.publicKey(base64ToBase64Url(masterSeed)) !== identity.masterKey) {
             throw new Error("source secret storage does not contain the cross-signing keys for this identity");
@@ -266,6 +267,7 @@ export class CygnusService {
             rotationKey: pendingMove.nextRotationSeed,
             masterSeed,
             selfSigningSeed,
+            userSigningSeed, // lets the destination publish all three keys
             sourceDeviceId: identity.deviceId,
             revokedDeviceIds: [...new Set([...identity.revokedDeviceIds, identity.deviceId])],
             roomIds: [...new Set([...allRooms, ...identity.pendingRebindRoomIds])],
@@ -283,11 +285,23 @@ export class CygnusService {
         return encrypted;
     }
 
-    /** Import a source-signed, passphrase-encrypted handoff on this destination session. */
-    async importMoveHandoff(encryptedBundle, passphrase, {sourceService, custodian, log} = {}) {
+    /**
+     * Import a source-signed, passphrase-encrypted handoff on this destination session.
+     * `publishCrossSigningKeys({masterSeed, selfSigningSeed, userSigningSeed})`, when
+     * given, publishes the carried keys on the destination account first (it needs the
+     * account password, which only the caller has); it must be idempotent.
+     */
+    async importMoveHandoff(encryptedBundle, passphrase, {sourceService, custodian, publishCrossSigningKeys, log} = {}) {
         this._requireSupport();
         const bundle = await decryptMoveBundle(encryptedBundle, passphrase, this._subtleCrypto);
         this._validateMoveBundle(bundle, custodian);
+        if (publishCrossSigningKeys) {
+            await publishCrossSigningKeys({
+                masterSeed: bundle.masterSeed,
+                selfSigningSeed: bundle.selfSigningSeed,
+                userSigningSeed: bundle.userSigningSeed,
+            });
+        }
         await this._validateDestinationCrossSigningKeys(bundle, log);
         if (!this._secretFetcher?.hasSecretStorage) {
             throw new Error("unlock destination secret storage before moving the Cygnus identity");

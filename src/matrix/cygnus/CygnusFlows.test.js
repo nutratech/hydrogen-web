@@ -425,9 +425,13 @@ export function tests() {
             assert.equal(identity.isRetired, true);
             assert.equal(identity.pendingMoveBundle, encryptedBundle);
 
+            let published;
             await destinationService.importMoveHandoff(encryptedBundle, passphrase, {
                 sourceService, custodian: serverB,
+                publishCrossSigningKeys: async seeds => { published = seeds; },
             });
+            assert.equal(typeof published.masterSeed, "string");
+            assert.equal(typeof published.selfSigningSeed, "string");
             assert.equal(destinationService.identity.get().deviceCertificate.device_id, "DESTINATION");
             assert.equal(identity.isRetired, true);
             assert.equal(identity.pendingMoveBundle, undefined);
