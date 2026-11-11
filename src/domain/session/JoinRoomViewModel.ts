@@ -9,7 +9,7 @@ Please see LICENSE files in the repository root for full details.
 import {ViewModel, Options as BaseOptions} from "../ViewModel";
 import {SegmentType} from "../navigation/index";
 import type {Session} from "../../matrix/Session.js";
-import {joinRoom} from "../../matrix/room/joinRoom";
+import {joinRoom, joinRoomWith} from "../../matrix/room/joinRoom";
 
 type Options = BaseOptions & {
     session: Session;
@@ -29,7 +29,7 @@ export class JoinRoomViewModel extends ViewModel<SegmentType, Options> {
         const cygnus = this._session.cygnus;
         if (cygnus) {
             this.track(cygnus.identity.subscribe(() => this.emitChange("canUseCygnus")));
-            cygnus.load().then(() => this.emitChange("canUseCygnus"), () => {});
+            cygnus.load().then(() => this.emitChange("canUseCygnus"), err => this.logger.log({l: "cygnus load failed"}).catch(err));
         }
     }
 
@@ -65,12 +65,13 @@ export class JoinRoomViewModel extends ViewModel<SegmentType, Options> {
         }
     }
 
-    private _joinWithCygnus(roomId: string, via: string[]): Promise<string> {
+    private async _joinWithCygnus(roomId: string, via: string[]): Promise<string> {
         // Device-signed events cite a room ID; aliases would need resolving first.
         if (!roomId.startsWith("!")) {
             throw new Error("Joining with a portable identity needs a room ID (!…), not an alias.");
         }
-        return this.logger.run("cygnus join room", log => this._session.cygnus.joinRoom(roomId, log, via));
+        return joinRoomWith(roomId, this._session,
+            () => this.logger.run("cygnus join room", log => this._session.cygnus.joinRoom(roomId, log, via)));
     }
 
     get joinInProgress(): boolean {

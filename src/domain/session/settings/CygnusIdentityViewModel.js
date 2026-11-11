@@ -7,6 +7,7 @@ import {ViewModel} from "../../ViewModel";
 
 export const CygnusStatus = Object.freeze({
     Loading: "loading",
+    LoadFailed: "loadFailed",
     Unsupported: "unsupported",
     NoIdentity: "noIdentity",
     Ready: "ready",
@@ -23,12 +24,14 @@ export class CygnusIdentityViewModel extends ViewModel {
         this.track(this._cygnus.identity.subscribe(() => this.emitChange()));
         this._cygnus.load().then(
             () => { this._loaded = true; this.emitChange(); },
-            err => { this._loaded = true; this._error = err.message; this.emitChange(); },
+            err => { this._loaded = true; this._loadFailed = true; this._error = err.message; this.emitChange(); },
         );
     }
 
     get status() {
         if (!this._loaded) return CygnusStatus.Loading;
+        // the stored identity was never read: offering to create one could replace it
+        if (this._loadFailed) return CygnusStatus.LoadFailed;
         if (!this._cygnus.isSupported) return CygnusStatus.Unsupported;
         return this._identity ? CygnusStatus.Ready : CygnusStatus.NoIdentity;
     }

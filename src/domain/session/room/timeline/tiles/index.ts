@@ -68,7 +68,7 @@ export function tileClassForEntry(entry: TimelineEntry, options: Options): TileC
                         return LocationTile;
                     case "m.key.verification.request":
                         const isCrossSigningDisabled = !options.session.features.crossSigning;
-                        const room = options.roomVM?.room;
+                        const room = options.room;
                         const ownUserIds = room?.ownUserIds || [options.session.userId];
                         if (isCrossSigningDisabled || ownUserIds.includes(entry.sender)) {
                             return undefined;

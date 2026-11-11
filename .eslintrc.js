@@ -18,7 +18,7 @@ module.exports = {
         {
             // CommonJS config files run under Node
             files: [".eslintrc.js", ".ts-eslintrc.js", "vite.*.js", "scripts/**/*.js"],
-            env: {node: true},
+            env: {browser: false, node: true},
         },
     ],
     globals: {

@@ -369,7 +369,7 @@ export class CygnusService {
                 await rooms.rebindRoom(roomId, {log, via: identity.pendingRebindVia});
                 await identity.markRoomRebound(roomId);
             } catch (err) {
-                failure ??= err;
+                if (!failure) failure = err;
             }
         }
         this.identity.set(identity);

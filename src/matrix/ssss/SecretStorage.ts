@@ -253,7 +253,7 @@ export function tests() {
             await new SecretStorage({key: key("k1", 7), platform: p, storage, hsApi: hsApi(), userId: "@a:hs"}).writeSecret("s", "value");
             const entry = storage.entries.get("s");
             entry.content.encrypted.k2 = entry.content.encrypted.k1;
-            await assert.rejects(new SecretStorage({key: key("k2", 9), platform: p, storage}).readSecret("s"));
+            await assert.rejects(new SecretStorage({key: key("k2", 9), platform: p, storage, hsApi: hsApi(), userId: "@a:hs"}).readSecret("s"));
         },
         "deleting a secret removes every encrypted copy from account data": async (assert: any) => {
             const storage = accountDataStorage();

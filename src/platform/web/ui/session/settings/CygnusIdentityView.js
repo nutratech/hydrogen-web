@@ -13,6 +13,8 @@ export class CygnusIdentityView extends TemplateView {
                 switch (status) {
                     case CygnusStatus.Loading:
                         return t.p(vm.i18n`Loading…`);
+                    case CygnusStatus.LoadFailed:
+                        return t.p(vm.i18n`Could not load your portable identity.`);
                     case CygnusStatus.Unsupported:
                         return t.p(vm.i18n`Your homeserver does not support portable identities (tk.nutra.cygnus).`);
                     case CygnusStatus.NoIdentity:

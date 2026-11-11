@@ -22,7 +22,7 @@ export class CreateRoomView extends TemplateView {
                 //t.div({className: "RoomView_error"}, vm => vm.error),
                 t.form({className: "CreateRoomView_detailsForm form", onChange: evt => this.onFormChange(evt), onSubmit: evt => this.onSubmit(evt)}, [
                     t.div({className: "vertical-layout"}, [
-                        t.button({type: "button", className: "CreateRoomView_selectAvatar", onClick: () => vm.selectAvatar()},
+                        t.button({type: "button", className: {"CreateRoomView_selectAvatar": true, hidden: vm => vm.isCygnus}, onClick: () => vm.selectAvatar()},
                             t.mapView(vm => vm.hasAvatar, hasAvatar => {
                                 if (hasAvatar) {
                                     return new AvatarView(vm, 64);
@@ -71,7 +71,7 @@ export class CreateRoomView extends TemplateView {
                         t.input({type: "checkbox", name: "isEncrypted", id: "isEncrypted", checked: vm.isEncrypted}),
                         t.label({for: "isEncrypted"}, vm.i18n`Enable end-to-end encryption`)
                     ]),
-                    t.div({className: {"form-row text": true, hidden: vm => !vm.isPublic}}, [
+                    t.div({className: {"form-row text": true, hidden: vm => !vm.isPublic || vm.isCygnus}}, [
                         t.label({for: "roomAlias"}, vm.i18n`Room alias`),
                         t.input({
                             onInput: evt => vm.setRoomAlias(evt.target.value),

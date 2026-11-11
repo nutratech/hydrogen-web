@@ -13,9 +13,14 @@ import {RoomStatus} from "./common";
  * @param roomId The id of the room to join
  * @param session A session instance
  */
-export async function joinRoom(roomId: string, session: Session): Promise<string> {
+export function joinRoom(roomId: string, session: Session): Promise<string> {
+    return joinRoomWith(roomId, session, () => session.joinRoom(roomId));
+}
+
+/** `joinRoom` with another way of joining (e.g. a device-signed Cygnus membership); same wait and error messages. */
+export async function joinRoomWith(roomId: string, session: Session, join: () => Promise<string>): Promise<string> {
     try {
-        const internalRoomId = await session.joinRoom(roomId);
+        const internalRoomId = await join();
         const roomStatusObservable = await session.observeRoomStatus(internalRoomId);
         await roomStatusObservable.waitFor((status: RoomStatus) => status === RoomStatus.Joined);
         return internalRoomId;
