@@ -30,6 +30,7 @@ export class RoomViewModelObservable extends ObservableValue {
     constructor(sessionViewModel, roomIdOrLocalId) {
         super(null);
         this._statusSubscription = null;
+        this._sessionsSubscription = null;
         this._sessionViewModel = sessionViewModel;
         this.id = roomIdOrLocalId;
     }
@@ -44,8 +45,16 @@ export class RoomViewModelObservable extends ObservableValue {
         const session = this._session();
         if (!session) {
             // the owning connection is unavailable: fail closed rather than show
-            // another connection's copy of the room, and say so
+            // another connection's copy of the room, say so, and look again
+            // when a connection's session arrives
             this.set(this._sessionViewModel._createUnavailableRoomViewModel(this.id));
+            this._sessionsSubscription = this._sessionViewModel.roomRouter.subscribeSessions(() => {
+                if (this._session()) {
+                    this._sessionsSubscription = this._sessionsSubscription();
+                    this.get()?.dispose();
+                    this.initialize();
+                }
+            });
             return;
         }
         const statusObservable = await session.observeRoomStatus(this.id);
@@ -87,6 +96,9 @@ export class RoomViewModelObservable extends ObservableValue {
     dispose() {
         if (this._statusSubscription) {
             this._statusSubscription = this._statusSubscription();
+        }
+        if (this._sessionsSubscription) {
+            this._sessionsSubscription = this._sessionsSubscription();
         }
         this.unsubscribeAll();
         this.get()?.dispose();

@@ -37,4 +37,5 @@ PATH="$NODE_BIN_DIR$PATH" TZ=UTC node node_modules/impunity/cmd.js \
     src/matrix/cygnus/CygnusFlows.test.js src/matrix/login/deviceIdLogin.test.js \
     src/matrix/verification/publishCrossSigningKeys.test.js src/matrix/workspace/WorkspaceStorage.test.js \
     src/matrix/workspace/RoomRouter.test.js \
+    src/matrix/workspace/WorkspaceConnections.test.js \
     --force-esm-dirs lib/ src/ --root-dir src/ "$@"

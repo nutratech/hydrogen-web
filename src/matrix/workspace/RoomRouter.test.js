@@ -67,14 +67,17 @@ export function tests() {
             assert.equal(router.sessionForRoom("!r"), undefined);
             assert.equal(router.sessionForRoom("!other"), source);
         },
-        "new rooms go to the destination once it is live, otherwise the source": assert => {
+        "once allowed, new rooms go to the destination when it is live, otherwise the source": assert => {
             const {workspace, workspaceStorage} = twoConnectionWorkspace();
             const source = fakeSession("source");
             const destination = fakeSession("destination");
-            const sourceOnly = new RoomRouter({workspace, workspaceStorage,
+            const gated = new RoomRouter({workspace, workspaceStorage,
+                sessions: new Map([[workspace.sourceConnectionId, source], ["dest", destination]])});
+            assert.equal(gated.sessionForNewRooms(), source);
+            const sourceOnly = new RoomRouter({workspace, workspaceStorage, newRoomsOnDestination: true,
                 sessions: new Map([[workspace.sourceConnectionId, source]])});
             assert.equal(sourceOnly.sessionForNewRooms(), source);
-            const both = new RoomRouter({workspace, workspaceStorage,
+            const both = new RoomRouter({workspace, workspaceStorage, newRoomsOnDestination: true,
                 sessions: new Map([[workspace.sourceConnectionId, source], ["dest", destination]])});
             assert.equal(both.newRoomConnectionId, "dest");
             assert.equal(both.sessionForNewRooms(), destination);

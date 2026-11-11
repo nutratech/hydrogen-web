@@ -15,6 +15,7 @@ import {ForcedLogoutViewModel} from "./ForcedLogoutViewModel";
 import {SessionPickerViewModel} from "./SessionPickerViewModel.js";
 import {ViewModel} from "./ViewModel";
 import {isVisibleSessionInfo} from "../matrix/workspace/WorkspaceStorage.js";
+import {WorkspaceConnections} from "../matrix/workspace/WorkspaceConnections.js";
 
 export class RootViewModel extends ViewModel {
     constructor(options) {
@@ -162,18 +163,30 @@ export class RootViewModel extends ViewModel {
     }
 
     _showSession(client) {
-        let workspace;
+        let connections;
         try {
             // created lazily on first open, never from the picker
-            workspace = this.platform.workspaceStorage?.ensureForSession(client.sessionId);
+            const workspace = this.platform.workspaceStorage?.ensureForSession(client.sessionId);
+            if (workspace) {
+                connections = new WorkspaceConnections({
+                    workspace,
+                    workspaceStorage: this.platform.workspaceStorage,
+                    sessionInfoStorage: this.platform.sessionInfoStorage,
+                    sourceClient: client,
+                    createClient: () => new Client(this.platform, this.features),
+                });
+            }
         } catch (err) {
             this._setSection(() => this._error = err);
             return;
         }
         this._setSection(() => {
-            this._sessionViewModel = new SessionViewModel(this.childOptions({client, workspace}));
+            this._sessionViewModel = new SessionViewModel(this.childOptions({client, connections}));
             this._sessionViewModel.start();
         });
+        // the source is shown already; the other connections come up in the
+        // background and a failed one is marked unavailable, never blocking it
+        connections?.start();
     }
 
     _showSessionLoader(sessionId) {

@@ -30,14 +30,13 @@ import {ToastCollectionViewModel} from "./toast/ToastCollectionViewModel";
 export class SessionViewModel extends ViewModel {
     constructor(options) {
         super(options);
-        const {client, workspace} = options;
+        const {client, connections} = options;
         this._client = this.track(client);
-        // which session owns each room; only the source connection exists until step 5
-        this._roomRouter = new RoomRouter(workspace ? {
-            workspace,
-            workspaceStorage: this.platform.workspaceStorage,
-            sessions: new Map([[workspace.sourceConnectionId, client.session]]),
-        } : {session: client.session});
+        // the workspace's live sessions (created by RootViewModel, which starts the
+        // secondary connections in the background); disposed with this view model
+        this._connections = connections ? this.track(connections) : null;
+        // which session owns each room
+        this._roomRouter = connections?.roomRouter ?? new RoomRouter({session: client.session});
         this._sessionStatusViewModel = this.track(new SessionStatusViewModel(this.childOptions({
             sync: client.sync,
             reconnector: client.reconnector,
@@ -132,6 +131,11 @@ export class SessionViewModel extends ViewModel {
                 }
             }
         }));
+    }
+
+    /** The workspace's connections and their status, or `null` without a workspace. */
+    get connections() {
+        return this._connections;
     }
 
     /** The workspace this session opens; room ownership lives there. */

@@ -23,15 +23,43 @@ export class RoomRouter {
      * @param {import("./WorkspaceStorage.js").WorkspaceStorage} [options.workspaceStorage]
      * @param {Map<string, object>} [options.sessions] connection ID → Session
      * @param {object} [options.session] the only session, when there is no workspace
+     * @param {boolean} [options.newRoomsOnDestination] see `newRoomConnectionId`
      */
-    constructor({workspace, workspaceStorage, sessions, session}) {
+    constructor({workspace, workspaceStorage, sessions, session, newRoomsOnDestination = false}) {
         this._workspace = workspace;
         this._workspaceStorage = workspaceStorage;
+        // shared with WorkspaceConnections, which adds and removes sessions as connections come and go
         this._sessions = workspace ? (sessions ?? new Map()) : new Map([["single", session]]);
+        this._newRoomsOnDestination = newRoomsOnDestination;
+        this._listeners = new Set();
     }
 
     get workspace() {
         return this._workspace;
+    }
+
+    /** Replace the workspace record after another writer changed it (e.g. a connection was added). */
+    updateWorkspace(workspace) {
+        if (workspace.id !== this._workspace?.id) {
+            throw new Error("a router serves one workspace");
+        }
+        this._workspace = workspace;
+        this.notifySessionsChanged();
+    }
+
+    /**
+     * Call `listener` whenever a connection's session arrives or goes away, so
+     * a room shown as unavailable can look again. Returns an unsubscribe function.
+     */
+    subscribeSessions(listener) {
+        this._listeners.add(listener);
+        return () => { this._listeners.delete(listener); };
+    }
+
+    notifySessionsChanged() {
+        for (const listener of [...this._listeners]) {
+            listener();
+        }
     }
 
     sessionForConnection(connectionId) {
@@ -49,12 +77,20 @@ export class RoomRouter {
     }
 
     /**
-     * Where new rooms are created and joined: the destination connection once
-     * it is live, otherwise the source.
+     * Where new rooms are created and joined. The source, unless the
+     * destination is allowed to take them (`newRoomsOnDestination`) and is live.
+     *
+     * Kept on the source by default: the destination account has no key
+     * backup or secret storage of its own yet, so encrypted rooms created
+     * there would have no recovery story. Cygnus rooms reach the destination
+     * through the move, not through this.
      */
     get newRoomConnectionId() {
         if (!this._workspace) {
             return "single";
+        }
+        if (!this._newRoomsOnDestination) {
+            return this._workspace.sourceConnectionId;
         }
         const destination = this._workspace.connections.find(c => c.role === "destination" && this._sessions.has(c.id));
         return destination?.id ?? this._workspace.sourceConnectionId;

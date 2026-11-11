@@ -158,6 +158,24 @@ export class Client {
         });
     }
 
+    /**
+     * Start a workspace's secondary connection from auth data (see
+     * doc/implementation planning/CYGNUS-WORKSPACE.md). The caller picks the
+     * session ID and records it in the workspace first, so the session info is
+     * written hidden in its first write: there is never a moment where it looks
+     * like an ordinary session that would get a workspace of its own. The
+     * account is not inspected for a dehydrated device, which would replace the
+     * device ID the connection must keep.
+     */
+    async startHiddenWithAuthData(sessionId, {accessToken, deviceId, userId, homeserver}) {
+        if (!sessionId) {
+            throw new TypeError("a session ID is required");
+        }
+        await this._platform.logger.run("startHiddenWithAuthData", async (log) => {
+            await this._createSessionAfterAuth({accessToken, deviceId, userId, homeserver}, false, false, log, {sessionId, hidden: true});
+        });
+    }
+
     async startWithLogin(loginMethod, {inspectAccountSetup} = {}) {
         const currentStatus = this._status.get();
         if (currentStatus !== LoadStatus.LoginFailed &&
@@ -222,8 +240,8 @@ export class Client {
         };
     }
 
-    async _createSessionAfterAuth({deviceId, userId, accessToken, homeserver}, inspectAccountSetup, isReadOnly, log) {
-        const id = this.createNewSessionId();
+    async _createSessionAfterAuth({deviceId, userId, accessToken, homeserver}, inspectAccountSetup, isReadOnly, log, {sessionId, hidden} = {}) {
+        const id = sessionId ?? this.createNewSessionId();
         const lastUsed = this._platform.clock.now();
         const sessionInfo = {
             id,
@@ -235,6 +253,9 @@ export class Client {
             lastUsed,
             isReadOnly,
         };
+        if (hidden) {
+            sessionInfo.hidden = true;
+        }
         let dehydratedDevice;
         if (inspectAccountSetup) {
             dehydratedDevice = await this._inspectAccountAfterLogin(sessionInfo, log);
@@ -304,11 +325,15 @@ export class Client {
             serverVersions: lastVersionsResponse.versions,
         });
 
-        // Let the serviceWorkerHandler know of this access-token and homeserver
-        this._platform.updateService.updateAuthData({
-            accessToken: sessionInfo.accessToken,
-            homeserver: sessionInfo.homeServer,
-        });
+        // Let the serviceWorkerHandler know of this access-token and homeserver.
+        // It holds one account's auth; a workspace's hidden connection must not
+        // replace the visible session's (per-connection auth is a later step).
+        if (!sessionInfo.hidden) {
+            this._platform.updateService.updateAuthData({
+                accessToken: sessionInfo.accessToken,
+                homeserver: sessionInfo.homeServer,
+            });
+        }
 
         this._session = new Session({
             storage: this._storage,

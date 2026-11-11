@@ -152,6 +152,31 @@ export class WorkspaceStorage {
         });
     }
 
+    /**
+     * Add a destination connection for `sessionId`. Call this before the
+     * session info exists, so that session is never seen without its workspace.
+     * Returns the new connection's ID and the updated workspace.
+     */
+    addConnection(workspaceId, {role = "destination", sessionId}) {
+        if (role !== "destination" || !sessionId) {
+            throw new TypeError("a destination connection needs a session ID");
+        }
+        let connectionId;
+        const workspace = this._mutate(data => {
+            const record = data.workspaces[workspaceId];
+            if (!record) {
+                throw new Error(`no workspace ${workspaceId}`);
+            }
+            if (Object.values(data.workspaces).some(r => r.connections.some(c => c.sessionId === sessionId))) {
+                throw new Error(`session ${sessionId} already has a connection`);
+            }
+            connectionId = this._createId();
+            record.connections.push({id: connectionId, role, sessionId});
+            return record;
+        });
+        return {connectionId, workspace};
+    }
+
     /** Point a connection at a new session, e.g. after re-authenticating its account. */
     setConnectionSession(workspaceId, connectionId, sessionId) {
         return this._mutateWorkspace(workspaceId, record => {

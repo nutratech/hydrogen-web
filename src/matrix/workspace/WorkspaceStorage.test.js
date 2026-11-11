@@ -80,6 +80,17 @@ export function tests() {
             assert.equal(isVisibleSessionInfo({id: "s2", hidden: true}, workspaces), false);
             assert.equal(isVisibleSessionInfo({id: "orphan", hidden: true}, workspaces), true);
         },
+        "a destination connection is added once, for an unused session": assert => {
+            const workspaces = storage();
+            const a = workspaces.ensureForSession("s1");
+            workspaces.ensureForSession("s2");
+            const {connectionId, workspace} = workspaces.addConnection(a.id, {sessionId: "s3"});
+            assert.equal(workspace.connection(connectionId).role, "destination");
+            assert.equal(workspaces.forSession("s3").id, a.id);
+            assert.throws(() => workspaces.addConnection(a.id, {sessionId: "s3"}), /already has a connection/);
+            assert.throws(() => workspaces.addConnection(a.id, {sessionId: "s2"}), /already has a connection/);
+            assert.throws(() => workspaces.addConnection(a.id, {role: "source", sessionId: "s4"}), /destination/);
+        },
         "a corrupt record is refused with a clear error": assert => {
             const corrupt = JSON.stringify({version: 1, workspaces: {x: {}}});
             const backing = memoryBacking({ws: corrupt});

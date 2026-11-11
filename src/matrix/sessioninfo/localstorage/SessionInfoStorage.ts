@@ -23,6 +23,11 @@ interface ISessionInfo {
      * can also be restored.
      */
     isReadOnly: boolean;
+    /**
+     * A workspace's secondary connection: listed and opened only through
+     * its workspace (see WorkspaceStorage).
+     */
+    hidden?: boolean;
 }
 
 // todo: this should probably be in platform/types?
@@ -30,6 +35,7 @@ interface ISessionInfoStorage {
     getAll(): Promise<ISessionInfo[]>;
     updateLastUsed(id: string, timestamp: number): Promise<void>;
     updateAccessToken(id: string, token: string): Promise<void>;
+    update(id: string, patch: Partial<Omit<ISessionInfo, "id">>): Promise<void>;
     get(id: string): Promise<ISessionInfo | undefined>;
     add(sessionInfo: ISessionInfo): Promise<void>;
     delete(sessionId: string): Promise<void>;
@@ -60,6 +66,17 @@ export class SessionInfoStorage implements ISessionInfoStorage {
             throw Error('No session found');
         }
         session.accessToken = accessToken;
+        localStorage.setItem(this._name, JSON.stringify(sessions));
+    }
+
+    /** Merge `patch` into a session's info, e.g. to hide a workspace's secondary connection. */
+    async update(id: string, patch: Partial<Omit<ISessionInfo, "id">>): Promise<void> {
+        const sessions = await this.getAll();
+        const session = sessions.find(session => session.id === id);
+        if (!session) {
+            throw Error('No session found');
+        }
+        Object.assign(session, patch, {id});
         localStorage.setItem(this._name, JSON.stringify(sessions));
     }
 
