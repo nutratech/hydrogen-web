@@ -4,6 +4,7 @@ Please see LICENSE files in the repository root for full details.
 */
 
 import {WorkspaceStorage, isVisibleSessionInfo} from "./WorkspaceStorage.js";
+import {ServiceWorkerHandler} from "../../platform/web/dom/ServiceWorkerHandler.js";
 
 /** A plain stand-in for `localStorage`; the Node test runner has none. */
 function memoryBacking(initial = {}) {
@@ -97,6 +98,33 @@ export function tests() {
             assert.throws(() => storage(backing).forSession("s1"), /corrupt workspace record x/);
             assert.throws(() => storage(backing).ensureForSession("s1"), /corrupt workspace record x/);
             assert.equal(backing.items.get("ws"), corrupt);
+        },
+        "the service worker treats a hidden connection's notifications as the open workspace's": async assert => {
+            const workspaces = storage();
+            const workspace = workspaces.ensureForSession("s1");
+            workspaces.addConnection(workspace.id, {sessionId: "s-hidden"});
+            workspaces.ensureForSession("s2");
+            const handler = new ServiceWorkerHandler({});
+            handler.setWorkspaceStorage(workspaces);
+            const open = {session: "s1", room: "!r"};
+            handler.setNavigation({observe: type => ({get: () => open[type]})});
+            const replies = [];
+            const ask = (type, payload) => handler._onMessage({data: {type, id: type, payload},
+                source: {postMessage: message => replies.push(message.payload)}});
+            await ask("hasRoomOpen", {sessionId: "s-hidden", roomId: "!r"});
+            await ask("hasRoomOpen", {sessionId: "s2", roomId: "!r"});
+            await ask("hasSessionOpen", {sessionId: "s-hidden"});
+            assert.deepEqual(replies, [true, false, true]);
+            handler.updateAuthData({accessToken: "a", homeserver: "https://old"});
+            handler.updateConnectionAuthData("s-hidden", {accessToken: "b", homeserver: "https://new"});
+            replies.length = 0;
+            await ask("getAuthInfo", {});
+            assert.deepEqual(replies[0], {accessToken: "a", homeserver: "https://old",
+                connections: [{accessToken: "b", homeserver: "https://new"}]});
+            handler.removeConnectionAuthData("s-hidden");
+            replies.length = 0;
+            await ask("getAuthInfo", {});
+            assert.deepEqual(replies[0].connections, []);
         },
     };
 }

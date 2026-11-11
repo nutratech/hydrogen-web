@@ -21,6 +21,14 @@ export class ServiceWorkerHandler {
         this._sessionInfoStorage = sessionInfoStorage;
         this.haltRequests = false;
         this._authData = {};
+        // a workspace's hidden connections, by session ID (see CYGNUS-WORKSPACE.md)
+        this._connectionAuthData = new Map();
+        this._workspaceStorage = null;
+    }
+
+    /** Lets a workspace's hidden sessions count as the open session they belong to. */
+    setWorkspaceStorage(workspaceStorage) {
+        this._workspaceStorage = workspaceStorage;
     }
 
     setNavigation(navigation) {
@@ -38,6 +46,41 @@ export class ServiceWorkerHandler {
             );
         }
         this._authData = { ...this._authData, ...auth };
+    }
+
+    /**
+     * Auth for a workspace's hidden connection, kept beside the visible
+     * session's rather than replacing it. The service worker picks whichever
+     * entry's homeserver the media request goes to.
+     */
+    updateConnectionAuthData(sessionId, {accessToken, homeserver}) {
+        if (!accessToken || !homeserver) {
+            throw new Error("updateConnectionAuthData needs accessToken and homeserver");
+        }
+        this._connectionAuthData.set(sessionId, {accessToken, homeserver});
+    }
+
+    removeConnectionAuthData(sessionId) {
+        this._connectionAuthData.delete(sessionId);
+    }
+
+    /**
+     * Whether `sessionId` is the open session, or a hidden connection of the
+     * open session's workspace (its notifications carry its own session ID).
+     */
+    _isSessionOpen(sessionId) {
+        const open = this._navigation.observe("session").get();
+        if (!sessionId || !open) {
+            return false;
+        }
+        if (open === sessionId) {
+            return true;
+        }
+        try {
+            return this._workspaceStorage?.forSession(sessionId)?.sourceSessionId === open;
+        } catch (err) {
+            return false;
+        }
     }
 
     registerAndStart(path) {
@@ -68,14 +111,10 @@ export class ServiceWorkerHandler {
             }
         }
         if (data.type === "hasSessionOpen") {
-            const hasOpen =
-                this._navigation.observe("session").get() ===
-                data.payload.sessionId;
+            const hasOpen = this._isSessionOpen(data.payload.sessionId);
             event.source.postMessage({ replyTo: data.id, payload: hasOpen });
         } else if (data.type === "hasRoomOpen") {
-            const hasSessionOpen =
-                this._navigation.observe("session").get() ===
-                data.payload.sessionId;
+            const hasSessionOpen = this._isSessionOpen(data.payload.sessionId);
             const hasRoomOpen =
                 this._navigation.observe("room").get() === data.payload.roomId;
             event.source.postMessage({
@@ -96,7 +135,7 @@ export class ServiceWorkerHandler {
         } else if (data.type === "getAuthInfo") {
             event.source.postMessage({
                 replyTo: data.id,
-                payload: this._authData,
+                payload: {...this._authData, connections: [...this._connectionAuthData.values()]},
             });
         }
     }

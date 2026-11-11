@@ -120,29 +120,28 @@ async function handleRequest({ request, clientId }) {
             url.pathname.indexOf("/_matrix/client/v1/media") === 0;
         if (pathNameStartsWithMediaPrefix) {
             const client = await self.clients.get(clientId);
-            const { accessToken, homeserver } = await sendAndWaitForReply(
+            const authInfo = await sendAndWaitForReply(
                 client,
                 "getAuthInfo",
                 {}
             );
-            if (!accessToken) {
+            // the visible session's auth first, then a workspace's hidden
+            // connections; use the one whose homeserver this request goes to
+            const candidates = [authInfo, ...(authInfo?.connections ?? [])]
+                .filter(auth => auth?.accessToken && auth?.homeserver);
+            if (candidates.length === 0) {
                 throw new Error(
-                    "Token returned from getAuthInfo message in sw.js is null!"
+                    "getAuthInfo message in sw.js returned no access token and homeserver!"
                 );
             }
-            if (!homeserver) {
-                throw new Error(
-                    "homeserver returned from getAuthInfo message in sw.js is null!"
-                );
-            }
-            // Is this request actually going to the homeserver?
-            const isRequestForHomeserver =
-                new URL(homeserver).origin === url.origin;
-            if (isRequestForHomeserver) {
-                // Only add the access-token if we know that this request
-                // is going to the homeserver.
+            // Only add the access-token if we know that this request
+            // is going to that homeserver.
+            const auth = candidates.find(
+                ({ homeserver }) => new URL(homeserver).origin === url.origin
+            );
+            if (auth) {
                 const headers = new Headers(request.headers);
-                headers.set("authorization", `Bearer ${accessToken}`);
+                headers.set("authorization", `Bearer ${auth.accessToken}`);
                 request = new Request(request, {
                     mode: "cors",
                     credentials: "omit",

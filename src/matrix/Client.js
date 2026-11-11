@@ -326,13 +326,14 @@ export class Client {
         });
 
         // Let the serviceWorkerHandler know of this access-token and homeserver.
-        // It holds one account's auth; a workspace's hidden connection must not
-        // replace the visible session's (per-connection auth is a later step).
-        if (!sessionInfo.hidden) {
-            this._platform.updateService.updateAuthData({
-                accessToken: sessionInfo.accessToken,
-                homeserver: sessionInfo.homeServer,
-            });
+        // A workspace's hidden connection adds its auth beside the visible
+        // session's instead of replacing it.
+        const auth = {accessToken: sessionInfo.accessToken, homeserver: sessionInfo.homeServer};
+        this._hiddenAuth = sessionInfo.hidden ? {homeserver: sessionInfo.homeServer} : null;
+        if (sessionInfo.hidden) {
+            this._platform.updateService?.updateConnectionAuthData?.(sessionInfo.id, auth);
+        } else {
+            this._platform.updateService.updateAuthData(auth);
         }
 
         this._session = new Session({
@@ -424,9 +425,13 @@ export class Client {
             throw Error("No session loaded, cannot update access token");
         }
         this._session.updateAccessToken(token);
-        this._platform.updateService.updateAuthData({
-            accessToken: token,
-        });
+        if (this._hiddenAuth) {
+            this._platform.updateService?.updateConnectionAuthData?.(this._sessionId, {accessToken: token, homeserver: this._hiddenAuth.homeserver});
+        } else {
+            this._platform.updateService.updateAuthData({
+                accessToken: token,
+            });
+        }
         await this._platform.sessionInfoStorage.updateAccessToken(this._sessionId, token);
     }
 
@@ -554,6 +559,10 @@ export class Client {
     }
 
     dispose() {
+        if (this._hiddenAuth) {
+            this._platform.updateService?.removeConnectionAuthData?.(this._sessionId);
+            this._hiddenAuth = null;
+        }
         if (this._reconnectSubscription) {
             this._reconnectSubscription();
             this._reconnectSubscription = null;

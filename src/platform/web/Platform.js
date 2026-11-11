@@ -151,6 +151,7 @@ export class Platform {
             this._serviceWorkerHandler = new ServiceWorkerHandler(
                 this.sessionInfoStorage
             );
+            this._serviceWorkerHandler.setWorkspaceStorage(this.workspaceStorage);
             this._serviceWorkerHandler.registerAndStart(assetPaths.serviceWorker);
         }
         this.notificationService = undefined;
