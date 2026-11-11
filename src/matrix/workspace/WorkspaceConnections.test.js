@@ -9,6 +9,7 @@ import {RoomViewModelObservable} from "../../domain/session/RoomViewModelObserva
 import {ObservableValue} from "../../observable/value";
 import {ObservableMap} from "../../observable";
 import {LoadStatus} from "../Client.js";
+import {SyncStatus} from "../Sync.js";
 import {WorkspaceRoomMap} from "./WorkspaceRoomMap.js";
 import {RoomStatus} from "../room/common";
 
@@ -38,6 +39,7 @@ function fakeClient(name, {outcome = "ready", sessionInfos, holds} = {}) {
         loadStatus: new ObservableValue(LoadStatus.NotLoading),
         loadError: null,
         session: null,
+        sync: {status: new ObservableValue(SyncStatus.Syncing), error: null},
         disposed: false,
         started: null,
         createNewSessionId: () => `session-${name}`,
@@ -279,6 +281,32 @@ export function tests() {
             assert.deepEqual(shown, ["source", "c0"]);
             assert.equal(observable.get().from, "c0");
             observable.dispose();
+        },
+        "a rejected destination token makes only that connection unavailable, asking to sign in again": async assert => {
+            const env = setup({clientOptions: {holds: {rooms: ["!dst"]}}});
+            const dest = env.addDestination();
+            const connections = env.connections();
+            await connections.start();
+            assert.equal(connections.roomRouter.sessionForRoom("!dst").name, "c0");
+            const client = env.created[0];
+            client.sync.error = {errcode: "M_UNKNOWN_TOKEN"};
+            client.sync.status.set(SyncStatus.Stopped);
+            const status = connections.statusOf(dest);
+            assert.equal(status.status, ConnectionStatus.Unavailable);
+            assert.equal(status.needsReauth, true);
+            assert.equal(connections.roomRouter.sessionForRoom("!dst"), undefined);
+            assert.equal(connections.roomRouter.sessionForRoom("!r").name, "source");
+            assert.equal(client.disposed, false);
+        },
+        "a destination stopping for another reason stays connected": async assert => {
+            const env = setup();
+            const dest = env.addDestination();
+            const connections = env.connections();
+            await connections.start();
+            const client = env.created[0];
+            client.sync.error = {name: "ConnectionError"};
+            client.sync.status.set(SyncStatus.Stopped);
+            assert.equal(connections.statusOf(dest).status, ConnectionStatus.Ready);
         },
     };
 }

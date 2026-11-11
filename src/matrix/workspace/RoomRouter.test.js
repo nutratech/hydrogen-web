@@ -136,5 +136,30 @@ export function tests() {
             assert.deepEqual(source.observed, []);
             observable.dispose();
         },
+        "the room observable reroutes when its owning connection replaces its session": async assert => {
+            const {workspace, workspaceStorage} = twoConnectionWorkspace();
+            workspaceStorage.setRoomOwner(workspace.id, "!r", "dest");
+            const destination = fakeSession("destination");
+            const sessions = new Map([[workspace.sourceConnectionId, fakeSession("source")], ["dest", destination]]);
+            const roomRouter = new RoomRouter({workspace: workspaceStorage.get(workspace.id), workspaceStorage, sessions});
+            const sessionViewModel = {
+                roomRouter,
+                _createRoomViewModelInstance: id => ({session: roomRouter.sessionForRoom(id).name, dispose() {}}),
+            };
+            const observable = new RoomViewModelObservable(sessionViewModel, "!r");
+            await observable.initialize();
+            assert.equal(observable.get().session, "destination");
+
+            const replacement = fakeSession("replacement");
+            sessions.set("dest", replacement);
+            roomRouter.notifyChanged();
+            await Promise.resolve();
+            await Promise.resolve();
+
+            assert.deepEqual(replacement.observed, ["!r"]);
+            assert.equal(observable.get().session, "replacement");
+            assert.deepEqual(destination.observed, ["!r"]);
+            observable.dispose();
+        },
     };
 }

@@ -32,6 +32,7 @@ export class RoomViewModelObservable extends ObservableValue {
         this._statusSubscription = null;
         this._routerSubscription = null;
         this._routedSession = undefined;
+        this._routeGeneration = 0;
         this._disposed = false;
         this._sessionViewModel = sessionViewModel;
         this.id = roomIdOrLocalId;
@@ -51,6 +52,7 @@ export class RoomViewModelObservable extends ObservableValue {
     }
 
     async _route() {
+        const generation = ++this._routeGeneration;
         const session = this._session();
         this._routedSession = session;
         if (!session) {
@@ -60,16 +62,30 @@ export class RoomViewModelObservable extends ObservableValue {
             return;
         }
         const statusObservable = await session.observeRoomStatus(this.id);
-        if (this._routedSession !== session || this._disposed) {
+        if (generation !== this._routeGeneration || this._disposed) {
             // rerouted (or disposed) while waiting
             return;
         }
-        this.set(await this._statusToViewModel(statusObservable.get()));
-        this._statusSubscription = statusObservable.subscribe(async status => {
-            // first dispose existing VM, if any
-            this.get()?.dispose();
-            this.set(await this._statusToViewModel(status));
+        const viewModel = await this._statusToViewModel(statusObservable.get());
+        if (generation !== this._routeGeneration || this._disposed) {
+            viewModel?.dispose();
+            return;
+        }
+        this.set(viewModel);
+        this._statusSubscription = statusObservable.subscribe(status => {
+            this._updateStatus(status, session, generation);
         });
+    }
+
+    async _updateStatus(status, session, generation) {
+        this.get()?.dispose();
+        this.set(null);
+        const viewModel = await this._statusToViewModel(status);
+        if (generation !== this._routeGeneration || this._disposed || this._session() !== session) {
+            viewModel?.dispose();
+            return;
+        }
+        this.set(viewModel);
     }
 
     _reroute() {
@@ -78,8 +94,10 @@ export class RoomViewModelObservable extends ObservableValue {
         }
         if (this._statusSubscription) {
             this._statusSubscription = this._statusSubscription();
+            this._statusSubscription = null;
         }
         this.get()?.dispose();
+        this.set(null);
         this._route();
     }
 
@@ -111,6 +129,7 @@ export class RoomViewModelObservable extends ObservableValue {
     }
 
     dispose() {
+        this._routeGeneration += 1;
         if (this._statusSubscription) {
             this._statusSubscription = this._statusSubscription();
         }

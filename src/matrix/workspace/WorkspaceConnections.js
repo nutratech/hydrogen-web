@@ -5,6 +5,11 @@ Please see LICENSE files in the repository root for full details.
 
 import {RoomRouter} from "./RoomRouter.js";
 import {LoadStatus} from "../Client.js";
+import {SyncStatus} from "../Sync.js";
+
+function isTokenRejected(error) {
+    return error?.errcode === "M_UNKNOWN_TOKEN";
+}
 
 export const ConnectionStatus = Object.freeze({
     Starting: "starting",
@@ -46,6 +51,7 @@ export class WorkspaceConnections {
         this._statuses = new Map([[workspace.sourceConnectionId, {status: ConnectionStatus.Ready}]]);
         this._listeners = new Set();
         this._claimSubscriptions = new Map();
+        this._authSubscriptions = new Map();
         this._disposed = false;
         this.roomRouter = new RoomRouter({workspace, workspaceStorage, sessions: this._sessions, newRoomsOnDestination});
     }
@@ -54,7 +60,7 @@ export class WorkspaceConnections {
         return this.roomRouter.workspace;
     }
 
-    /** `{status, error}` for a connection; `undefined` for a connection this workspace does not have. */
+    /** `{status, error, needsReauth}` for a connection; `undefined` for a connection this workspace does not have. */
     statusOf(connectionId) {
         return this._statuses.get(connectionId);
     }
@@ -139,6 +145,7 @@ export class WorkspaceConnections {
                     try {
                         if (!this._disposed) {
                             this._claimRoomsOf(connectionId, client.session);
+                            this._watchAuth(connectionId, client);
                             this._sessions.set(connectionId, client.session);
                             this._setStatus(connectionId, {status: ConnectionStatus.Ready});
                             this.roomRouter.notifyChanged();
@@ -151,8 +158,9 @@ export class WorkspaceConnections {
                 } else if (status === LoadStatus.Error || status === LoadStatus.LoginFailed) {
                     settled = true;
                     unsubscribe();
-                    this._setStatus(connectionId, {status: ConnectionStatus.Unavailable,
-                        error: client.loadError ?? new Error(`connection ${connectionId} failed to load`)});
+                    const error = client.loadError ?? new Error(`connection ${connectionId} failed to load`);
+                    this._setStatus(connectionId, {status: ConnectionStatus.Unavailable, error,
+                        needsReauth: isTokenRejected(error)});
                     resolve();
                 }
             };
@@ -173,8 +181,10 @@ export class WorkspaceConnections {
             return;
         }
         if (status.status !== ConnectionStatus.Ready) {
-            this._claimSubscriptions.get(connectionId)?.();
-            this._claimSubscriptions.delete(connectionId);
+            for (const subscriptions of [this._claimSubscriptions, this._authSubscriptions]) {
+                subscriptions.get(connectionId)?.();
+                subscriptions.delete(connectionId);
+            }
             if (this._sessions.delete(connectionId)) {
                 this.roomRouter.notifyChanged();
             }
@@ -208,6 +218,27 @@ export class WorkspaceConnections {
         this._claimSubscriptions.set(connectionId, () => unsubscribes.forEach(unsubscribe => unsubscribe()));
     }
 
+    /**
+     * A secondary connection whose access token is rejected becomes
+     * unavailable and asks for re-authentication. It is not the workspace
+     * logging out: the source and its rooms keep working, and this
+     * connection's rooms show as unavailable until it signs in again.
+     * (The source's own token loss still goes through SessionViewModel's
+     * forced logout.)
+     */
+    _watchAuth(connectionId, client) {
+        const sync = client.sync;
+        if (!sync) {
+            return;
+        }
+        const unsubscribe = sync.status.subscribe(status => {
+            if (status === SyncStatus.Stopped && isTokenRejected(sync.error)) {
+                this._setStatus(connectionId, {status: ConnectionStatus.Unavailable, error: sync.error, needsReauth: true});
+            }
+        });
+        this._authSubscriptions.set(connectionId, unsubscribe);
+    }
+
     _assertNotDisposed() {
         if (this._disposed) {
             throw new Error("workspace connections are disposed");
@@ -217,10 +248,12 @@ export class WorkspaceConnections {
     /** Stop and release every secondary client. The source client belongs to its view model. */
     dispose() {
         this._disposed = true;
-        for (const unsubscribe of this._claimSubscriptions.values()) {
-            unsubscribe();
+        for (const subscriptions of [this._claimSubscriptions, this._authSubscriptions]) {
+            for (const unsubscribe of subscriptions.values()) {
+                unsubscribe();
+            }
+            subscriptions.clear();
         }
-        this._claimSubscriptions.clear();
         for (const client of this._clients.values()) {
             client.dispose();
         }
