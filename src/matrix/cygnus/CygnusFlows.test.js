@@ -216,7 +216,7 @@ export function tests() {
                 storage: memoryStorage(), hsApi: api, crypto,
                 masterSeed: SELF_SIGNING, selfSigningSeed: USR_MSK,
                 deviceId: "HYDROGEN", displayUserId: "@alice:chat.example.org",
-            }));
+            }), /genesis master key differs from request/);
         },
         "refuses a genesis link for another user ID": async assert => {
             const crypto = await loadedCrypto([USR_ROT_1]);
@@ -225,7 +225,7 @@ export function tests() {
                 storage: memoryStorage(), hsApi: api, crypto,
                 masterSeed: USR_MSK, selfSigningSeed: SELF_SIGNING,
                 deviceId: "HYDROGEN", displayUserId: "@mallory:chat.example.org",
-            }));
+            }), /custodian minted .* expected @mallory:chat.example.org/);
         },
         "rotation extends the chain and commits to a fresh key": async assert => {
             const {identity, crypto, calls, storage} = await aliceIdentity([SELF_SIGNING, USR_ROT_2]);

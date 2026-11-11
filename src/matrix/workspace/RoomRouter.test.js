@@ -40,7 +40,7 @@ function twoConnectionWorkspace() {
     const record = JSON.parse(backing.items.get("ws"));
     record.workspaces[created.id].connections.push({id: "dest", role: "destination", sessionId: "s-dest"});
     backing.setItem("ws", JSON.stringify(record));
-    return {workspaceStorage, workspace: workspaceStorage.get(created.id)};
+    return {workspaceStorage, backing, workspace: workspaceStorage.get(created.id)};
 }
 
 export function tests() {
@@ -93,11 +93,12 @@ export function tests() {
             assert.equal(router.sessionForLocalId("local-2"), undefined);
         },
         "claiming a room for the source keeps the map sparse": assert => {
-            const {workspace, workspaceStorage} = twoConnectionWorkspace();
+            const {workspace, workspaceStorage, backing} = twoConnectionWorkspace();
             const router = new RoomRouter({workspace, workspaceStorage, sessions: new Map()});
             router.claimRoom("!r", "dest");
             router.claimRoom("!r", workspace.sourceConnectionId);
             assert.equal(workspaceStorage.get(workspace.id).ownerOf("!r"), workspace.sourceConnectionId);
+            assert.deepEqual(JSON.parse(backing.items.get("ws")).workspaces[workspace.id].rooms, {});
         },
         "without a workspace every room routes to the one session": assert => {
             const session = fakeSession("only");

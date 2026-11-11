@@ -59,6 +59,11 @@ export function tests() {
             const backing = memoryBacking();
             const workspaces = storage(backing);
             const workspace = workspaces.ensureForSession("s1");
+            const record = JSON.parse(backing.items.get("ws"));
+            record.workspaces[workspace.id].connections.push({id: "dest", role: "destination", sessionId: "s2"});
+            backing.setItem("ws", JSON.stringify(record));
+            workspaces.setRoomOwner(workspace.id, "!room", "dest");
+            assert.deepEqual(JSON.parse(backing.items.get("ws")).workspaces[workspace.id].rooms, {"!room": "dest"});
             const updated = workspaces.setRoomOwner(workspace.id, "!room", workspace.sourceConnectionId);
             assert.deepEqual(JSON.parse(backing.items.get("ws")).workspaces[workspace.id].rooms, {});
             assert.equal(updated.ownerOf("!room"), workspace.sourceConnectionId);
