@@ -208,12 +208,6 @@ export class CygnusIdentity {
         await this._persist();
     }
 
-    async retireAfterMove() {
-        const {rotationSeed, deviceSeed, deviceCertificate, pendingMove, pendingRotation, pendingRebindRooms, pendingRebindVia, ...rest} = this._record; // eslint-disable-line no-unused-vars
-        this._record = {...rest, retired: true, handoffPending: false};
-        await this._persist();
-    }
-
     /** Persist the encrypted recovery bundle atomically with destroying signer material. */
     async retireWithMoveBundle(encryptedBundle) {
         const {rotationSeed, deviceSeed, deviceCertificate, pendingMove, pendingRotation, pendingRebindRooms, pendingRebindVia, ...rest} = this._record; // eslint-disable-line no-unused-vars
@@ -238,7 +232,14 @@ export class CygnusIdentity {
      * `hasPendingRotation`) rather than losing the only key that can extend the
      * chain.
      */
-    async rotate({log} = {}) {
+    rotate({log} = {}) {
+        // a second call waits for the first, then sees its result (a clean record, or the same pending link)
+        const run = (this._rotating ?? Promise.resolve()).catch(() => {}).then(() => this._rotate({log}));
+        this._rotating = run;
+        return run;
+    }
+
+    async _rotate({log} = {}) {
         if (this._record.retired || this._record.handoffPending) {
             throw new Error("this device cannot rotate while its Cygnus identity is being moved");
         }

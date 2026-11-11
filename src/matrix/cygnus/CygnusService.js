@@ -150,14 +150,25 @@ export class CygnusService {
         if (!master || !selfSigning) {
             throw new Error("Set up cross-signing and unlock secret storage first: the principal's master key is your cross-signing master key.");
         }
-        const identity = await CygnusIdentity.create({
-            ...this._deps(),
-            masterSeed: base64ToBase64Url(master),
-            selfSigningSeed: base64ToBase64Url(selfSigning),
-            deviceId: this._deviceId,
-            displayUserId: this._userId,
-            log,
-        });
+        let identity;
+        try {
+            identity = await CygnusIdentity.create({
+                ...this._deps(),
+                masterSeed: base64ToBase64Url(master),
+                selfSigningSeed: base64ToBase64Url(selfSigning),
+                deviceId: this._deviceId,
+                displayUserId: this._userId,
+                log,
+            });
+        } catch (err) {
+            // creation persists the identity before backing up its rotation key; adopt it
+            // rather than let a retry mint a second principal over it
+            const persisted = await CygnusIdentity.load(this._deps()).catch(() => undefined);
+            if (persisted) {
+                this.identity.set(persisted);
+            }
+            throw err;
+        }
         this.identity.set(identity);
         return identity;
     }
@@ -173,6 +184,9 @@ export class CygnusService {
         const identity = this._requireIdentity();
         if (deviceId === identity.deviceId) {
             throw new Error("another active Cygnus signer must revoke this device");
+        }
+        if (identity.pendingMove) {
+            throw new Error("finish the pending Cygnus move before revoking a device");
         }
         await identity.revokeDevice(deviceId);
         await identity.rotate({log});
@@ -216,7 +230,14 @@ export class CygnusService {
         // Stop ordinary event signing before preparing or encrypting the
         // handoff. A failure here can resume the exact same signed move link.
         await identity.beginMoveHandoff();
-        const pendingMove = await identity.prepareMove({custodian, displayUserId, roomIds: allRooms});
+        let pendingMove;
+        try {
+            pendingMove = await identity.prepareMove({custodian, displayUserId, roomIds: allRooms});
+        } catch (err) {
+            // no signed move link exists yet: let this device sign again
+            await identity.cancelMoveHandoff().catch(() => {});
+            throw err;
+        }
         if (pendingMove.custodian !== custodian || pendingMove.displayUserId !== displayUserId) {
             throw new Error("pending Cygnus move targets a different destination");
         }
@@ -260,6 +281,8 @@ export class CygnusService {
         if (!identity) {
             const record = {
                 ...bundle.record,
+                // the bundle's room list also carries rooms still waiting to be rebound
+                pendingMove: {...bundle.record.pendingMove, roomIds: bundle.roomIds},
                 links: bundle.links.slice(0, -1),
                 rotationSeed: bundle.rotationKey,
                 deviceId: this._deviceId,
@@ -324,11 +347,18 @@ export class CygnusService {
     async resumeMoveRebinds(log) {
         const identity = this._requireIdentity();
         const rooms = new CygnusRooms({identity, signer: this._signer(identity)});
-        for (const roomId of identity.pendingRebindRoomIds) {
-            await rooms.rebindRoom(roomId, {log, via: identity.pendingRebindVia});
-            await identity.markRoomRebound(roomId);
+        let failure;
+        // one room that cannot rejoin must not keep the others from rebinding
+        for (const roomId of [...identity.pendingRebindRoomIds]) {
+            try {
+                await rooms.rebindRoom(roomId, {log, via: identity.pendingRebindVia});
+                await identity.markRoomRebound(roomId);
+            } catch (err) {
+                failure ??= err;
+            }
         }
         this.identity.set(identity);
+        if (failure) throw failure;
     }
 
     async _finishMoveHandoff(identity, sourceService, log, bundle) {
@@ -341,8 +371,9 @@ export class CygnusService {
         await this._secretFetcher.writeSecret("m.cross_signing.self_signing", bundle.selfSigningSeed, log);
         await this._secretFetcher.writeSecret("m.principal.rotation_key", base64UrlToBase64(identity.rotationSeed), log);
         identity.setSecretFetcher(this._secretFetcher);
-        await sourceService?.acknowledgeMoveHandoff();
         if (identity.isHandoffPending) await identity.finishMoveHandoff();
+        // only now is the destination committed; the source's recovery bundle can go
+        await sourceService?.acknowledgeMoveHandoff();
         this.identity.set(identity);
     }
 
@@ -425,6 +456,7 @@ export class CygnusService {
 
     /** Resolve a Matrix user ID to its principal, for invites, kicks and bans (§9). */
     async lookupPrincipal(userId, log) {
+        await this.load(log);
         this._requireSupport();
         const {principal} = await this._hsApi.cygnusLookupPrincipal(userId, {log}).response();
         const parsed = this._crypto.parsePrincipal(principal);

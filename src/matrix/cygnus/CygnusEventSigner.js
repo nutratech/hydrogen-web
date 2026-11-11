@@ -159,7 +159,9 @@ export class CygnusEventSigner {
         try {
             response = await this._hsApi.cygnusSendSigned(txnId, signed, {log}).response();
         } catch (err) {
-            if (err instanceof HomeServerError) {
+            // keep the signed event for retryable failures (429, timeouts, 5xx) so a retry resends it
+            const status = err.statusCode;
+            if (err instanceof HomeServerError && status >= 400 && status < 500 && status !== 408 && status !== 429) {
                 await this._put(signedEventKey(txnId), undefined);
             }
             throw err;
@@ -219,8 +221,9 @@ export class CygnusEventSigner {
         const txn = await this._storage.readTxn([roomState, timelineEvents]);
         for (const [type, stateKey] of [["m.room.user_epoch", this._identity.principal], ["m.room.server_epoch", this._identity.custodian]]) {
             const observed = (await txn.roomState.get(roomId, type, stateKey))?.event;
-            if (!observed?.event_id || draft.auth_events.includes(observed.event_id)) continue;
+            if (!observed?.event_id) continue;
             for (const eventId of draft.auth_events) {
+                if (eventId === observed.event_id) continue;
                 const cited = (await txn.timelineEvents.getByEventId(roomId, eventId))?.event;
                 if (cited?.type === type && cited.state_key === stateKey &&
                     Number(cited.content?.height) < Number(observed.content?.height)) {

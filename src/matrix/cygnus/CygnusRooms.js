@@ -34,18 +34,24 @@ export class CygnusRooms {
             },
         }, {log});
         const roomId = `!${created.eventId.slice(1)}`;
-        await this._join(roomId, log);
-        await this._signer.send({
-            roomId,
-            type: "m.room.join_rules",
-            stateKey: "",
-            content: {join_rule: isPublic ? "public" : "invite"},
-        }, {log});
-        if (name) {
-            await this._signer.send({roomId, type: "m.room.name", stateKey: "", content: {name}}, {log});
-        }
-        if (topic) {
-            await this._signer.send({roomId, type: "m.room.topic", stateKey: "", content: {topic}}, {log});
+        try {
+            await this._join(roomId, log);
+            await this._signer.send({
+                roomId,
+                type: "m.room.join_rules",
+                stateKey: "",
+                content: {join_rule: isPublic ? "public" : "invite"},
+            }, {log});
+            if (name) {
+                await this._signer.send({roomId, type: "m.room.name", stateKey: "", content: {name}}, {log});
+            }
+            if (topic) {
+                await this._signer.send({roomId, type: "m.room.topic", stateKey: "", content: {topic}}, {log});
+            }
+        } catch (err) {
+            // the room exists now; let the caller finish it with `joinRoom` instead of creating another
+            err.roomId = roomId;
+            throw err;
         }
         return roomId;
     }
@@ -64,13 +70,14 @@ export class CygnusRooms {
         return this._join(roomId, log, via, txnId);
     }
 
-    leaveRoom(roomId, {log} = {}) {
+    leaveRoom(roomId, {log, txnId = `cygnus-leave-${this._identity.height}-${roomId}`} = {}) {
+        // the same transaction ID on retry resends the stored signed event instead of signing a second leave
         return this._signer.send({
             roomId,
             type: "m.room.member",
             stateKey: this._identity.principal,
             content: {membership: "leave", custodian: this._identity.custodian},
-        }, {log});
+        }, {log, txnId});
     }
 
     async _join(roomId, log, via, txnId) {

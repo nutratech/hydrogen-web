@@ -46,8 +46,12 @@ export class Room extends BaseRoom {
             // MSC00FC rooms: the device signs each event and submits it through `send_signed`
             getSignedSender: () => {
                 const cygnus = getCygnus?.();
-                if (!this.isCygnus || !cygnus) {
+                if (!this.isCygnus) {
                     return undefined;
+                }
+                if (!cygnus) {
+                    // never fall back to an unsigned send in a Cygnus room
+                    return () => Promise.reject(new Error("this is a Cygnus room; enable the Cygnus feature to send"));
                 }
                 return (type, content, txnId, log) => cygnus.sendRoomEvent(this.id, type, content, txnId, log);
             },
