@@ -16,7 +16,8 @@ const HASHED_CACHED_ON_REQUEST_ASSETS = DEFINE_HASHED_CACHED_ON_REQUEST_ASSETS;
 
 const unhashedCacheName = `hydrogen-assets-${DEFINE_GLOBAL_HASH}`;
 const hashedCacheName = `hydrogen-assets`;
-const mediaThumbnailCacheName = `hydrogen-media-thumbnails-v3`;
+// Bump when media request URLs change, so old cache keys are discarded.
+const mediaThumbnailCacheName = `hydrogen-media-thumbnails-v4`;
 
 self.addEventListener("install", function (e) {
     e.waitUntil(

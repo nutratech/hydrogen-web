@@ -129,6 +129,8 @@ export class CygnusIdentity {
     get pendingRebindVia() {
         return (this._record.pendingRebindVia || this._record.pendingMove?.rebindVia || []).slice();
     }
+    /** Chain height the move completed at; stable while rebinds are pending. */
+    get rebindHeight() { return this._record.pendingRebindHeight ?? this.height; }
     get isRetired() { return !!this._record.retired; }
     get isHandoffPending() { return !!this._record.handoffPending; }
     get pendingRevocationImport() { return this._record.pendingRevocationImport; }
@@ -334,6 +336,8 @@ export class CygnusIdentity {
             rotationSeed: pending.nextRotationSeed,
             pendingRebindRooms: pending.roomIds,
             pendingRebindVia: pending.rebindVia,
+            // fixed at the move: later rotations must not change a rebind's transaction ID
+            pendingRebindHeight: links.length - 1,
         };
         if (hsApi) this.setHomeserverApi(hsApi);
         await this._persist();
@@ -360,11 +364,11 @@ export class CygnusIdentity {
 
     async markRoomRebound(roomId) {
         const pendingRebindRooms = (this._record.pendingRebindRooms || []).filter(id => id !== roomId);
-        const {pendingRebindVia, ...rest} = this._record;
+        const {pendingRebindVia, pendingRebindHeight, ...rest} = this._record;
         this._record = {
             ...rest,
             pendingRebindRooms,
-            ...(pendingRebindRooms.length ? {pendingRebindVia} : {}),
+            ...(pendingRebindRooms.length ? {pendingRebindVia, pendingRebindHeight} : {}),
         };
         await this._persist();
     }

@@ -337,15 +337,8 @@ export class CygnusService {
                 crypto: this._crypto,
             });
             this.identity.set(identity);
-        } else if (identity.principal !== bundle.record.principal || !identity.isHandoffPending) {
-            throw new Error("destination session already has a different or active Cygnus identity");
         }
 
-        const storedRotationKey = await this._secretFetcher.readSecretStorage("m.principal.rotation_key");
-        const storedSeed = storedRotationKey ? base64ToBase64Url(storedRotationKey) : undefined;
-        if (storedSeed && storedSeed !== bundle.rotationKey) {
-            throw new Error("destination secret storage already contains a different rotation key");
-        }
         await this._secretFetcher.writeSecret("m.principal.rotation_key", base64UrlToBase64(bundle.rotationKey), log);
         if (identity.pendingMove || identity.pendingRevocationImport) {
             const response = await this._hsApi.cygnusImportPrincipal(

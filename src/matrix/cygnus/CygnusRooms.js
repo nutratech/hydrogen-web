@@ -66,7 +66,7 @@ export class CygnusRooms {
     }
 
     async rebindRoom(roomId, {log, via} = {}) {
-        const txnId = `cygnus-rebind-${this._identity.height}-${roomId}`;
+        const txnId = `cygnus-rebind-${this._identity.rebindHeight}-${roomId}`;
         return this._join(roomId, log, via, txnId);
     }
 
