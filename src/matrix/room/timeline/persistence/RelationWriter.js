@@ -271,6 +271,31 @@ export function tests() {
             await readTxn.complete();
             assert(storedMessage.annotations["🐶"]);
         },
+        "a reaction from the room principal counts as mine": async assert => {
+            const principal = "u:principal";
+            const event = withTextBody("Dogs > Cats", createEvent("m.room.message", "!abc", bob));
+            const reaction = withContent(createAnnotation(event.event_id, "🐶"), createEvent("m.reaction", "!def", principal));
+            const reactionEntry = new EventEntry({event: reaction, roomId}, fragmentIdComparer);
+            const relationWriter = new RelationWriter({roomId, getOwnUserIds: () => [alice, principal], fragmentIdComparer});
+            const storage = await createMockStorage();
+            const txn = await storage.readWriteTxn([storage.storeNames.timelineEvents, storage.storeNames.timelineRelations]);
+            txn.timelineEvents.tryInsert({fragmentId: 1, eventIndex: 2, event, roomId}, new NullLogItem());
+            const updatedEntries = await relationWriter.writeRelation(reactionEntry, txn, new NullLogItem());
+            await txn.complete();
+            assert.equal(updatedEntries[0].annotations["🐶"].me, true);
+        },
+        "a reaction from someone else is not mine even with a principal": async assert => {
+            const event = withTextBody("Dogs > Cats", createEvent("m.room.message", "!abc", bob));
+            const reaction = withContent(createAnnotation(event.event_id, "🐶"), createEvent("m.reaction", "!def", bob));
+            const reactionEntry = new EventEntry({event: reaction, roomId}, fragmentIdComparer);
+            const relationWriter = new RelationWriter({roomId, getOwnUserIds: () => [alice, "u:principal"], fragmentIdComparer});
+            const storage = await createMockStorage();
+            const txn = await storage.readWriteTxn([storage.storeNames.timelineEvents, storage.storeNames.timelineRelations]);
+            txn.timelineEvents.tryInsert({fragmentId: 1, eventIndex: 2, event, roomId}, new NullLogItem());
+            const updatedEntries = await relationWriter.writeRelation(reactionEntry, txn, new NullLogItem());
+            await txn.complete();
+            assert.equal(updatedEntries[0].annotations["🐶"].me, false);
+        },
         "aggregate second reaction": async assert => {
             const event = withTextBody("Dogs > Cats", createEvent("m.room.message", "!abc", bob));
             const reaction1 = withContent(createAnnotation(event.event_id, "🐶"), createEvent("m.reaction", "!def", alice));
