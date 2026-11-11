@@ -74,23 +74,23 @@ A `RoomRouter` (or the room handle itself) is the one place that knows owners.
 
 ## Cygnus on top of the workspace
 
-### Same device ID on both accounts
+### A new device on the destination, the source device revoked
 
-The destination logs in with `device_id` set to the source session's device
-ID; Matrix `/login` and `/register` accept one. Each account still has its own
-Olm keys under that ID. The Cygnus device key and certificate are not Olm keys:
-the certificate binds a device ID to Hydrogen's own Cygnus device key (§5.2.1).
-With the same ID the certificate stays valid on the destination, so:
+The destination session is its own Matrix device with its own device ID, and
+it gets its own Cygnus device key. The move therefore:
 
-- the device needs no re-certification;
-- device floors carry over, since they are keyed by (principal, device, room);
-- the device is **not** revoked on import. Revocation is permanent per device
-  ID (proposal `48402eb4c`), so revoking it would lock this device out of the
-  new custodian for good.
+- **certifies the destination device**: the destination signs a device
+  certificate (§5.2.1) with the carried cross-signing master and self-signing
+  seeds, so the principal vouches for the new device ID;
+- **revokes the source device**: revocation is permanent per device ID, and
+  the source signs it before retiring, so a retired device can never sign for
+  the principal again;
+- **starts without device floors**: floors are keyed by (principal, device,
+  room), so the new device has none and takes its first `prev_events` from the
+  homeserver's draft.
 
-Servers may ignore the requested ID. The login checks
-`response.device_id === identity.deviceId` and stops before anything is signed
-if it differs.
+Requesting a device ID at login (`Client.loginWithDeviceId`) stays available
+for a flow that must keep one, but the move does not use it.
 
 ### Cross-signing on the destination
 
@@ -106,18 +106,19 @@ The source signs the move link: the current rotation key never leaves it, and
 the destination receives only the next key and the signed link. Once signed,
 the key is spent, so the move is retry-only:
 
-1. The destination connection is logged in (same device ID) and publishes the
+1. The destination connection is logged in (its own device ID) and publishes the
    cross-signing keys.
 2. The source signs the move link and persists the link and the next rotation
    key. From now on it is locked for signing. It cannot cancel back to normal
    signing, because its rotation key is spent.
-3. The workspace copies the Cygnus identity record (same device key and
-   certificate, the next rotation key, revoked IDs) into the destination's
-   storage, and the destination backs the next key up to its own secret
-   storage. Both connections are in the same browser, so nothing is
+3. The workspace hands the destination the Cygnus identity record without the
+   source's device key or certificate (the next rotation key, revoked IDs
+   including the source device, and the carried cross-signing seeds); the
+   destination certifies its own device and backs the next key up to its own
+   secret storage. Both connections are in the same browser, so nothing is
    transported.
-4. The destination imports the full chain, with the existing revoked list and
-   without this device ID. On failure, retry the same import.
+4. The destination imports the full chain with the revoked list, which includes
+   the source device. On failure, retry the same import.
 5. Once the import and backup are confirmed, the source is retired: its
    rotation key is deleted locally and from its secret storage.
 6. The destination sends a signed rebinding join in each Cygnus room, `via` the
@@ -184,9 +185,8 @@ after the Node 18 suite and both lints pass.
 
 - Which server takes receipts and typing in Cygnus rooms; the proposal is
   silent. This design sends them to the room's owner.
-- The proposal's handoff text (`384b10893`, `42bdc26f5`) should say that when
-  the destination login reuses the device ID, the certificate stays valid and
-  the device is not revoked.
+- The proposal's handoff text (`384b10893`, `42bdc26f5`) should say that the
+  destination certifies a new device and the source device is revoked.
 - A room both accounts are in stays owned by the source. Whether the user can
   choose to switch it is a later UI decision.
 - Resolved in step 5: the service worker keeps the visible session's auth

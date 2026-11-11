@@ -8,13 +8,14 @@ Nothing has run against a real homeserver yet; `../congruent` will be the first.
 ## Broken today in Cygnus rooms
 
 - [x] **Own messages look like someone else's.** The sender of your events is
-      your principal (`@<root>`), not your Matrix ID. About 57 comparisons in 9
-      files under `src/matrix/room` and `src/domain/session/room` check
-      `sender === ownUserId`, so own messages render as another user's, can't be
-      edited or redacted from the menu, and may mark the room unread. Fix: give
-      rooms an "own sender IDs" set (Matrix ID + principal) and compare against
-      it. Implemented by recognizing both the Matrix ID and principal in room
-      summaries, timelines, reactions, power checks, and verification handling.
+      your principal (`@<root>`), not your Matrix ID. `BaseRoom.ownUserIds`
+      returns the Matrix ID plus the principal for Cygnus rooms, and room
+      summaries, timelines (resolved at lookup, so a late-created identity is
+      seen), reactions, power levels (reloaded when the identity changes),
+      message tiles and verification handling compare against that set. The
+      remaining direct `sender ===` comparisons are either set-aware
+      (`BaseMessageTile`, `VerificationTile`) or unrelated to own-sender
+      recognition (`RoomMemberTile`, tile grouping).
 - [x] **Leave uses the plain `/leave`** (`Room.js` `leave`). It must be a
       device-signed `m.room.member` `leave` through `cygnus.sendRoomEvent`-style
       state sending.
@@ -111,7 +112,7 @@ explicitly.
 - **Cross-signing on the new account.** §5.2.1 binds the principal to the
   account's cross-signing master key, and `POST /principal` checks it. The
   destination account must publish the same master key as its cross-signing
-  master key; Hydrogen cannot upload cross-signing keys yet. The proposal should
+  master key. `publishCrossSigningKeys` can upload them, but the move flow does not call it yet. The proposal should
   say whether `/principal/import` checks this too.
 - **Source session after the move.** It stays logged in on the old homeserver,
   retired. Offer to log it out.
@@ -139,8 +140,8 @@ explicitly.
       makes revocation permanent, so a replacement device must use a fresh ID.
 - [x] **Stale-epoch heuristic.** Before signing, compare the draft's
       `auth_events` with the newest observed user and custodian epochs; refuse
-      when it omits either epoch or the user's epoch height differs from the
-      local chain. The proposal makes this a SHOULD in both signing modes.
+      when it cites an older observed epoch event. Unseen or omitted epochs are
+      accepted because the homeserver may be ahead of `/sync`. The proposal makes this a SHOULD in both signing modes.
 - [x] **Device floors per room and device.** Floors are keyed by principal,
       device ID, and room ID, as required by the proposal.
 - [x] **Client-side API contract plumbing.** Join drafts now pass `via`; the
