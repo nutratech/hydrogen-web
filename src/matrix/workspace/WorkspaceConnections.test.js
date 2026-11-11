@@ -91,13 +91,13 @@ function setup({destinationSessionInfo = true, clientOptions = {}, sourceHolds} 
         addDestination() {
             const {connectionId} = workspaceStorage.addConnection(workspace.id, {sessionId: "s-dest"});
             if (destinationSessionInfo) {
-                sessionInfos.set("s-dest", {id: "s-dest", hidden: true});
+                sessionInfos.set("s-dest", {id: "s-dest", hidden: true, userId: "@me:new"});
             }
             workspace = workspaceStorage.get(workspace.id);
             return connectionId;
         },
         connections() {
-            return new WorkspaceConnections({workspace, workspaceStorage, sessionInfoStorage, sourceClient: source, createClient});
+            return new WorkspaceConnections({workspace: workspaceStorage.get(workspace.id), workspaceStorage, sessionInfoStorage, sourceClient: source, createClient});
         },
     };
 }
@@ -307,6 +307,73 @@ export function tests() {
             client.sync.error = {name: "ConnectionError"};
             client.sync.status.set(SyncStatus.Stopped);
             assert.equal(connections.statusOf(dest).status, ConnectionStatus.Ready);
+        },
+        "a room the destination stops holding goes back to the source": async assert => {
+            const env = setup({sourceHolds: {rooms: ["!r"]}, clientOptions: {holds: {rooms: [], invites: ["!x"]}}});
+            const dest = env.addDestination();
+            const connections = env.connections();
+            await connections.start();
+            assert.equal(connections.workspace.ownerOf("!x"), dest);
+            const rooms = new WorkspaceRoomMap(connections.roomRouter, s => s.invites);
+            const unsubscribe = rooms.subscribe({onAdd() {}, onUpdate() {}, onRemove() {}, onReset() {}});
+            // the invite is rejected on the destination...
+            connections.roomRouter.sessionForConnection(dest).invites.remove("!x");
+            assert.equal(connections.workspace.ownerOf("!x"), connections.workspace.sourceConnectionId);
+            // ...so a later invite to the source is listed and routes there
+            const sourceSession = env.source.session;
+            sourceSession.invites.add("!x", {id: "!x", from: "source"});
+            assert.equal(rooms.get("!x").from, "source");
+            assert.equal(connections.roomRouter.sessionForRoom("!x").name, "source");
+            unsubscribe();
+        },
+        "a stale claim is released when the connection comes up without the room": async assert => {
+            const env = setup({clientOptions: {holds: {rooms: []}}});
+            const dest = env.addDestination();
+            env.workspaceStorage.setRoomOwner(env.workspaceStorage.getAll()[0].id, "!gone", dest);
+            const connections = env.connections();
+            assert.equal(connections.workspace.ownerOf("!gone"), dest);
+            await connections.start();
+            assert.equal(connections.workspace.ownerOf("!gone"), connections.workspace.sourceConnectionId);
+        },
+        "a claim stays while its connection is only unavailable": async assert => {
+            const env = setup({clientOptions: {outcome: "error"}});
+            const dest = env.addDestination();
+            env.workspaceStorage.setRoomOwner(env.workspaceStorage.getAll()[0].id, "!kept", dest);
+            const connections = env.connections();
+            await connections.start();
+            assert.equal(connections.workspace.ownerOf("!kept"), dest);
+        },
+        "a connection that cannot store a claim keeps syncing": async assert => {
+            const env = setup({clientOptions: {holds: {rooms: []}}});
+            env.addDestination();
+            const connections = env.connections();
+            await connections.start();
+            connections.roomRouter.claimRooms = () => { throw new Error("quota"); };
+            const destSession = connections.roomRouter.sessionForConnection(connections.workspace.connections[1].id);
+            const originalError = console.error;
+            console.error = () => {};
+            try {
+                destSession.rooms.add("!new", {id: "!new"});
+            } finally {
+                console.error = originalError;
+            }
+            assert.equal(destSession.rooms.get("!new").id, "!new");
+        },
+        "a signed-out destination is reported with its account": async assert => {
+            const env = setup();
+            const dest = env.addDestination();
+            const connections = env.connections();
+            await connections.start();
+            assert.deepEqual(connections.problems(), []);
+            const changes = [];
+            connections.subscribe(id => changes.push(id));
+            const client = env.created[0];
+            client.sync.error = {errcode: "M_UNKNOWN_TOKEN"};
+            client.sync.status.set(SyncStatus.Stopped);
+            assert.deepEqual(changes, [dest]);
+            const [problem] = connections.problems();
+            assert.equal(problem.userId, "@me:new");
+            assert.equal(problem.needsReauth, true);
         },
     };
 }

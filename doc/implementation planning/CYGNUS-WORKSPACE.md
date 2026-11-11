@@ -155,7 +155,27 @@ after the Node 18 suite and both lints pass.
    receipt, invite, leave and media.
 5. The second connection: hidden `sessionInfo`, a full sync with its own E2EE
    (so new ordinary rooms can be encrypted), merged room list, notifications
-   and sync status.
+   and sync status. Done, except the E2EE recovery story:
+   - `WorkspaceConnections`, created by `RootViewModel` above
+     `SessionViewModel`, restores every connection on each open: the source
+     is shown first, the others start in the background, and one that fails
+     is unavailable without blocking the workspace.
+   - A destination is recorded in the workspace before its session info,
+     which is written hidden in its first write
+     (`Client.startHiddenWithAuthData`, no dehydrated-device lookup).
+   - One room list (`WorkspaceRoomMap`), each room from its owner. A room or
+     invite only a secondary connection holds is claimed for it; one the
+     source also holds stays with the source; a claimed room the connection
+     stops holding goes back to the source.
+   - A rejected destination token makes only that connection unavailable,
+     reported in the status bar as needing to sign in again. Re-auth itself
+     is step 7.
+   - **Gate:** new rooms (create, join) stay on the source
+     (`RoomRouter.newRoomsOnDestination`, off) until the destination has
+     secret storage and key backup of its own.
+   - Still to do before step 6: a logout of the source must not strand the
+     destination (its session info is deleted while the workspace still
+     points at it, so the hidden-session redirect leads nowhere).
 6. The Cygnus move: source signs and locks, retry the import, rebind, then
    transfer ownership with the room's history.
 7. The move screen, the Legacy area and the two logout actions.
@@ -169,12 +189,12 @@ after the Node 18 suite and both lints pass.
   the device is not revoked.
 - A room both accounts are in stays owned by the source. Whether the user can
   choose to switch it is a later UI decision.
-- The service worker currently stores one `{homeserver, accessToken}` pair,
-  updated by `Client._loadSessionInfo`, and only attaches that token for
-  requests to that origin. With two connections, the last-loaded client would
-  replace the other's credentials. Step 5 must provide per-connection auth
-  data or another safe request-auth lookup so media and other service-worker
-  requests work for both homeservers.
-- Both sync streams can report notifications for a room around ownership
-  transfer. Step 5 must filter notifications by the persisted room owner and
-  avoid duplicate or stale notifications from the former owner.
+- Resolved in step 5: the service worker keeps the visible session's auth
+  and each hidden connection's (`updateConnectionAuthData`) and attaches the
+  token of whichever homeserver a media request goes to.
+- Resolved in step 5: notifications from a hidden connection carry its own
+  session ID; the service worker handler counts it as the open workspace (so a
+  room on screen is not notified), and opening it redirects to the workspace
+  with the room kept. `sw.js` already collapses notifications by room. This
+  maps on the client rather than changing the pusher payload, so existing
+  pushers keep working.

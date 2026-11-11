@@ -77,6 +77,11 @@ export class Workspace {
         return this._record.rooms[roomId] ?? this._record.sourceConnectionId;
     }
 
+    /** The rooms explicitly owned by `connectionId` (the source's rooms are implicit). */
+    roomsOwnedBy(connectionId) {
+        return Object.entries(this._record.rooms).filter(([, owner]) => owner === connectionId).map(([roomId]) => roomId);
+    }
+
     get sourceSessionId() {
         return this.connection(this.sourceConnectionId)?.sessionId;
     }

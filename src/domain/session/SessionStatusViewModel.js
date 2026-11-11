@@ -23,7 +23,9 @@ const SessionStatus = createEnum(
 export class SessionStatusViewModel extends ViewModel {
     constructor(options) {
         super(options);
-        const {sync, reconnector, session} = options;
+        const {sync, reconnector, session, connections} = options;
+        // a workspace's other connections; one that stops working is reported here
+        this._connections = connections;
         this._sync = sync;
         this._reconnector = reconnector;
         this._status = this._calculateState(reconnector.connectionStatus.get(), sync.status.get());
@@ -36,6 +38,9 @@ export class SessionStatusViewModel extends ViewModel {
         const update = () => this._updateStatus();
         this.track(this._sync.status.subscribe(update));
         this.track(this._reconnector.connectionStatus.subscribe(update));
+        if (this._connections) {
+            this.track(this._connections.subscribe(() => this.emitChange()));
+        }
         this.track(this._session.needsKeyBackup.subscribe(() => {
             this.emitChange();
         }));
@@ -46,7 +51,13 @@ export class SessionStatusViewModel extends ViewModel {
     }
 
     get isShown() {
-        return (this._session.needsKeyBackup.get() && !this._dismissSecretStorage) || this._status !== SessionStatus.Syncing;
+        return (this._session.needsKeyBackup.get() && !this._dismissSecretStorage) ||
+            this._status !== SessionStatus.Syncing || !!this._connectionProblem;
+    }
+
+    /** The first of the workspace's other connections that is not working, if any. */
+    get _connectionProblem() {
+        return this._connections?.problems()[0];
     }
 
     get statusLabel() {
@@ -61,6 +72,13 @@ export class SessionStatusViewModel extends ViewModel {
                 return this.i18n`Catching up with your conversations…`;
             case SessionStatus.SyncError:
                 return this.i18n`Sync failed because of ${this._sync.error}`;
+        }
+        const problem = this._connectionProblem;
+        if (problem) {
+            const account = problem.userId ?? this.i18n`your other account`;
+            return problem.needsReauth ?
+                this.i18n`${account} was signed out; sign in again to see its rooms.` :
+                this.i18n`${account} is not connected; its rooms are unavailable.`;
         }
         if (this._session.needsKeyBackup.get()) {
             return this.i18n`Set up session backup to decrypt older messages.`;

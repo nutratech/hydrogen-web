@@ -52,6 +52,7 @@ export class WorkspaceConnections {
         this._listeners = new Set();
         this._claimSubscriptions = new Map();
         this._authSubscriptions = new Map();
+        this._userIds = new Map();
         this._disposed = false;
         this.roomRouter = new RoomRouter({workspace, workspaceStorage, sessions: this._sessions, newRoomsOnDestination});
     }
@@ -63,6 +64,18 @@ export class WorkspaceConnections {
     /** `{status, error, needsReauth}` for a connection; `undefined` for a connection this workspace does not have. */
     statusOf(connectionId) {
         return this._statuses.get(connectionId);
+    }
+
+    /**
+     * Secondary connections that are not working, for the status bar:
+     * `[{connectionId, userId, needsReauth, error}]`. Their rooms are
+     * unavailable until they are back.
+     */
+    problems() {
+        return [...this._statuses.entries()]
+            .filter(([, s]) => s.status === ConnectionStatus.Unavailable)
+            .map(([connectionId, s]) => ({connectionId, userId: this._userIds.get(connectionId),
+                needsReauth: !!s.needsReauth, error: s.error}));
     }
 
     clientFor(connectionId) {
@@ -99,6 +112,7 @@ export class WorkspaceConnections {
         const {connectionId, workspace} = this._workspaceStorage.addConnection(this.workspace.id, {sessionId});
         this.roomRouter.updateWorkspace(workspace);
         this._clients.set(connectionId, client);
+        this._userIds.set(connectionId, authData.userId);
         await this._run(connectionId, client, () => client.startHiddenWithAuthData(sessionId, authData));
         const {status, error} = this.statusOf(connectionId);
         if (status !== ConnectionStatus.Ready) {
@@ -114,6 +128,7 @@ export class WorkspaceConnections {
             if (!sessionInfo) {
                 throw new Error(`connection ${connection.id} has no session ${connection.sessionId}`);
             }
+            this._userIds.set(connection.id, sessionInfo.userId);
             if (this._disposed) {
                 return;
             }
@@ -201,17 +216,35 @@ export class WorkspaceConnections {
      * also holds stays the source's; see `RoomRouter.unclaimedRoomIds`.
      */
     _claimRoomsOf(connectionId, session) {
-        const claim = roomIds => {
+        const holds = roomId => !!(session.rooms.get(roomId) || session.invites.get(roomId));
+        // runs inside the connection's sync (map events): never throw into it
+        const guarded = (what, apply) => {
+            try {
+                apply();
+            } catch (err) {
+                console.error(`workspace: could not ${what} on connection ${connectionId}`, err);
+            }
+        };
+        const claim = roomIds => guarded("claim rooms", () => {
             const unclaimed = this.roomRouter.unclaimedRoomIds(connectionId, roomIds);
             if (unclaimed.length) {
                 this.roomRouter.claimRooms(unclaimed, connectionId);
             }
-        };
+        });
+        // a room this connection owns but no longer holds (invite rejected,
+        // room left) goes back to the source, or the source's copy would stay hidden
+        const release = roomIds => guarded("release rooms", () => {
+            const released = roomIds.filter(roomId => this.workspace.ownerOf(roomId) === connectionId && !holds(roomId));
+            if (released.length) {
+                this.roomRouter.claimRooms(released, this.workspace.sourceConnectionId);
+            }
+        });
+        release(this.workspace.roomsOwnedBy(connectionId));
         claim([...session.rooms.keys(), ...session.invites.keys()]);
         const handler = {
             onAdd: key => claim([key]),
             onUpdate() {},
-            onRemove() {},
+            onRemove: key => release([key]),
             onReset() {},
         };
         const unsubscribes = [session.rooms.subscribe(handler), session.invites.subscribe(handler)];

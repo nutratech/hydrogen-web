@@ -42,6 +42,7 @@ export class SessionViewModel extends ViewModel {
             sync: client.sync,
             reconnector: client.reconnector,
             session: client.session,
+            connections,
         })));
         // one list across the workspace's connections, each room from its owner
         this._leftPanelViewModel = this.track(new LeftPanelViewModel(this.childOptions({
