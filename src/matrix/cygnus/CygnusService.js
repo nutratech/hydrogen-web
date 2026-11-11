@@ -340,13 +340,33 @@ export class CygnusService {
             if (existing && (existing.principal !== bundle.record.principal || !existing.isHandoffPending)) {
                 throw new Error("destination session already has a different or active Cygnus identity");
             }
+            if (existing) {
+                const tipLink = bundle.links[bundle.links.length - 1];
+                const sourceMarkerMatches = !existing.pendingRevocationImport ||
+                    existing.pendingRevocationImport === bundle.sourceDeviceId;
+                const pendingMoveMatches = existing.pendingMove &&
+                    existing.pendingMove.link === tipLink &&
+                    existing.pendingMove.nextRotationSeed === bundle.rotationKey &&
+                    existing.pendingMove.custodian === custodian &&
+                    existing.pendingMove.displayUserId === this._userId &&
+                    JSON.stringify(existing.links) === JSON.stringify(bundle.links.slice(0, -1));
+                const completedMoveMatches = !existing.pendingMove &&
+                    JSON.stringify(existing.links) === JSON.stringify(bundle.links) &&
+                    existing.rotationSeed === bundle.rotationKey &&
+                    existing.revokedDeviceIds.includes(bundle.sourceDeviceId);
+                if (!sourceMarkerMatches || (!pendingMoveMatches && !completedMoveMatches) ||
+                    JSON.stringify(existing.revokedDeviceIds) !== JSON.stringify(bundle.revokedDeviceIds)) {
+                    throw new Error("destination identity does not match this move bundle");
+                }
+            }
             return existing;
         };
-        checkIdentity();
         const earlyRotationKey = await this._secretFetcher.readSecretStorage("m.principal.rotation_key");
         if (earlyRotationKey && base64ToBase64Url(earlyRotationKey) !== bundle.rotationKey) {
             throw new Error("destination secret storage already contains a different rotation key");
         }
+        // Check again after the storage await, before key publication can change the account.
+        checkIdentity();
         await this._publishDestinationCrossSigningKeys(bundle, requestPassword, publishKeys, log);
         await this._validateDestinationCrossSigningKeys(bundle, log);
         // the awaits above may have shown a password prompt; re-check what is stored now

@@ -430,6 +430,25 @@ export function tests() {
             assert.equal(identity.isRetired, true);
             assert.equal(identity.pendingMoveBundle, encryptedBundle);
 
+            // A retry must bind to the persisted completed move before publishing keys.
+            const importedRecord = importedIdentity._record;
+            for (const [field, value] of [
+                ["links", [...importedRecord.links, U0]],
+                ["rotationSeed", USR_ROT_1],
+                ["pendingRevocationImport", "OTHER_DEVICE"],
+            ]) {
+                importedIdentity._record = {...importedRecord, [field]: value};
+                await importedIdentity._persist();
+                let publishedMismatch = false;
+                await assert.rejects(destinationService.importMoveHandoff(encryptedBundle, passphrase, {
+                    sourceService, custodian: serverB,
+                    publishCrossSigningKeys: async () => { publishedMismatch = true; },
+                }), /destination identity does not match this move bundle/);
+                assert.equal(publishedMismatch, false);
+            }
+            importedIdentity._record = importedRecord;
+            await importedIdentity._persist();
+
             let published;
             await destinationService.importMoveHandoff(encryptedBundle, passphrase, {
                 sourceService, custodian: serverB,
@@ -443,6 +462,92 @@ export function tests() {
             assert.equal(identity.pendingMoveBundle, undefined);
             assert.equal(destinationSecrets.secrets.has(ROTATION_KEY_SECRET), true);
             assert.equal(sourceSecrets.secrets.has(ROTATION_KEY_SECRET), false);
+        },
+        "a marker-only destination resumes only with its own bundle": async assert => {
+            const sourceSecrets = memorySecrets({
+                "m.cross_signing.master": toStandard(USR_MSK),
+                "m.cross_signing.self_signing": toStandard(SELF_SIGNING),
+                "m.cross_signing.user_signing": toStandard(USR_USK),
+            });
+            const {identity, crypto, storage} = await aliceIdentity([SELF_SIGNING, USR_ROT_2], {secretFetcher: sourceSecrets});
+            const sourceService = new CygnusService({
+                storage, hsApi: {}, secretFetcher: sourceSecrets,
+                userId: "@alice:chat.example.org", deviceId: "HYDROGEN", subtleCrypto: webcrypto.subtle,
+            });
+            sourceService._crypto = crypto;
+            sourceService._isSupported = true;
+            sourceService.identity.set(identity);
+            const serverB = crypto.verifyChain([SERVER_B_GENESIS]).principal;
+            const destinationSecrets = memorySecrets();
+            let destinationService;
+            const {api: destination} = assistedApi(crypto, () => destinationService.identity.get());
+            destinationService = new CygnusService({
+                storage: memoryStorage(),
+                hsApi: destination,
+                secretFetcher: destinationSecrets,
+                userId: "@alice:second.example.net",
+                deviceId: "DESTINATION",
+                subtleCrypto: webcrypto.subtle,
+            });
+            destinationService._crypto = crypto;
+            destinationService._isSupported = true;
+            destination.queryKeys = () => request({
+                master_keys: {[destinationService._userId]: {keys: {master: crypto.publicKey(USR_MSK)}}},
+                self_signing_keys: {[destinationService._userId]: {keys: {self_signing: crypto.publicKey(SELF_SIGNING)}}},
+                user_signing_keys: {[destinationService._userId]: {keys: {user_signing: crypto.publicKey(USR_USK)}}},
+            });
+            let imports = 0;
+            destination.cygnusImportPrincipal = links => {
+                imports += 1;
+                return request({principal: USER_U, links});
+            };
+
+            const passphrase = "correct horse battery staple";
+            const encryptedBundle = await sourceService.prepareMoveHandoff({
+                custodian: serverB,
+                displayUserId: "@alice:second.example.net",
+                passphrase,
+            });
+            // leave the state a restart between completeMove and its cleanup produces
+            const clearPendingRevocationImport = CygnusIdentity.prototype.clearPendingRevocationImport;
+            let failCleanup = true;
+            CygnusIdentity.prototype.clearPendingRevocationImport = async function () {
+                if (failCleanup) {
+                    failCleanup = false;
+                    throw new Error("temporary cleanup failure");
+                }
+                return clearPendingRevocationImport.call(this);
+            };
+            try {
+                await assert.rejects(destinationService.importMoveHandoff(encryptedBundle, passphrase, {
+                    sourceService, custodian: serverB,
+                }), /temporary cleanup failure/);
+            } finally {
+                CygnusIdentity.prototype.clearPendingRevocationImport = clearPendingRevocationImport;
+            }
+            const imported = destinationService.identity.get();
+            assert.equal(imported.pendingMove, undefined);
+            assert.equal(imported.pendingRevocationImport, "HYDROGEN");
+            assert.equal(imports, 1);
+            const rotationKey = destinationSecrets.secrets.get(ROTATION_KEY_SECRET);
+
+            // another bundle for the same principal must not overwrite the secret or erase the marker
+            imported._record = {...imported._record, pendingRevocationImport: "OTHER"};
+            await assert.rejects(destinationService.importMoveHandoff(encryptedBundle, passphrase, {
+                sourceService, custodian: serverB,
+            }), /does not match this move bundle/);
+            assert.equal(destinationSecrets.secrets.get(ROTATION_KEY_SECRET), rotationKey);
+            assert.equal(imported.pendingRevocationImport, "OTHER");
+            assert.equal(imports, 1);
+
+            imported._record = {...imported._record, pendingRevocationImport: "HYDROGEN"};
+            await destinationService.importMoveHandoff(encryptedBundle, passphrase, {
+                sourceService, custodian: serverB,
+            });
+            // the completed chain is not imported a second time
+            assert.equal(imports, 1);
+            assert.equal(destinationService.identity.get().pendingRevocationImport, undefined);
+            assert.equal(destinationService.identity.get().deviceCertificate.device_id, "DESTINATION");
         },
         "join drafts carry via only when given": async assert => {
             const {identity, crypto, storage} = await aliceIdentity();
