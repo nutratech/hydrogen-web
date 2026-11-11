@@ -105,6 +105,14 @@ export class CygnusService {
         /** @type {ObservableValue<CygnusIdentity | undefined>} */
         this.identity = new ObservableValue(undefined);
         this._loading = undefined;
+        this._identityLock = Promise.resolve();
+    }
+
+    /** Run identity-changing flows (create, move import) one at a time. */
+    _withIdentityLock(fn) {
+        const run = this._identityLock.then(fn, fn);
+        this._identityLock = run.catch(() => {});
+        return run;
     }
 
     /** True once `load` found the homeserver advertising MSC00FC. */
@@ -151,7 +159,11 @@ export class CygnusService {
      * the account's cross-signing keys, so secret storage must be unlocked (or
      * the keys shared from another device) first.
      */
-    async createIdentity(log) {
+    createIdentity(log) {
+        return this._withIdentityLock(() => this._createIdentity(log));
+    }
+
+    async _createIdentity(log) {
         await this.load(log);
         this._requireSupport();
         if (this.identity.get()) {
@@ -296,7 +308,11 @@ export class CygnusService {
      * only when the account does not already publish them, so the caller can show
      * the UIA password prompt.
      */
-    async importMoveHandoff(encryptedBundle, passphrase, {sourceService, custodian, requestPassword, publishCrossSigningKeys: publishKeys, log} = {}) {
+    importMoveHandoff(encryptedBundle, passphrase, options = {}) {
+        return this._withIdentityLock(() => this._importMoveHandoff(encryptedBundle, passphrase, options));
+    }
+
+    async _importMoveHandoff(encryptedBundle, passphrase, {sourceService, custodian, requestPassword, publishCrossSigningKeys: publishKeys, log} = {}) {
         this._requireSupport();
         const bundle = await decryptMoveBundle(encryptedBundle, passphrase, this._subtleCrypto);
         this._validateMoveBundle(bundle, custodian);
@@ -307,16 +323,22 @@ export class CygnusService {
         if (this._crypto.publicKey(base64ToBase64Url(bundle.masterSeed)) !== bundle.record.masterKey) {
             throw new Error("carried cross-signing master key does not match the principal");
         }
-        let identity = this.identity.get();
-        if (identity && (identity.principal !== bundle.record.principal || !identity.isHandoffPending)) {
-            throw new Error("destination session already has a different or active Cygnus identity");
-        }
+        const checkIdentity = () => {
+            const existing = this.identity.get();
+            if (existing && (existing.principal !== bundle.record.principal || !existing.isHandoffPending)) {
+                throw new Error("destination session already has a different or active Cygnus identity");
+            }
+            return existing;
+        };
+        checkIdentity();
         const earlyRotationKey = await this._secretFetcher.readSecretStorage("m.principal.rotation_key");
         if (earlyRotationKey && base64ToBase64Url(earlyRotationKey) !== bundle.rotationKey) {
             throw new Error("destination secret storage already contains a different rotation key");
         }
         await this._publishDestinationCrossSigningKeys(bundle, requestPassword, publishKeys, log);
         await this._validateDestinationCrossSigningKeys(bundle, log);
+        // the awaits above may have shown a password prompt; re-check what is stored now
+        let identity = checkIdentity();
         if (!identity) {
             const record = {
                 ...bundle.record,
@@ -340,13 +362,14 @@ export class CygnusService {
         }
 
         await this._secretFetcher.writeSecret("m.principal.rotation_key", base64UrlToBase64(bundle.rotationKey), log);
-        if (identity.pendingMove || identity.pendingRevocationImport) {
+        if (identity.pendingMove) {
             const response = await this._hsApi.cygnusImportPrincipal(
                 bundle.links, bundle.revokedDeviceIds, {log},
             ).response();
             await identity.completeMove(response.links, response.principal, this._hsApi);
-            if (identity.pendingRevocationImport) await identity.clearPendingRevocationImport();
         }
+        // a restart between completeMove and this cleanup leaves only the marker; the chain is already imported
+        if (identity.pendingRevocationImport) await identity.clearPendingRevocationImport();
         if (!identity.deviceCertificate) {
             await identity.certifyDevice({
                 deviceId: this._deviceId,

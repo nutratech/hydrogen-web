@@ -113,6 +113,9 @@ export async function publishCrossSigningKeys({hsApi, userId, password, requestP
         if (password === undefined && typeof requestPassword === "function") {
             password = await requestPassword();
         }
+        if (typeof password !== "string" || !password) {
+            throw new Error("the homeserver requires the account password to publish cross-signing keys, but none was provided");
+        }
         const second = hsApi.uploadCrossSigningKeys({
             ...upload,
             auth: {

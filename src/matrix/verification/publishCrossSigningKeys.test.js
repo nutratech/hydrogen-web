@@ -130,6 +130,27 @@ export function tests() {
             hsApi.uploadCrossSigningKeys = () => request(401, {session: "s1", flows: [{stages: ["m.login.sso"]}]});
             await assert.rejects(publishCrossSigningKeys({hsApi, userId: USER, password: "pw", seeds, signer}), /does not offer password/);
         },
+        "asks for the password only after the first 401 challenge": async assert => {
+            const signer = await nodeSigner();
+            const hsApi = homeserver();
+            let asked = 0;
+            const requestPassword = async () => { asked++; assert.equal(hsApi.uploads.length, 1); return "pw"; };
+            await publishCrossSigningKeys({hsApi, userId: USER, requestPassword, seeds, signer});
+            assert.equal(asked, 1);
+        },
+        "does not ask for a password when one is supplied or none is needed": async assert => {
+            const signer = await nodeSigner();
+            const requestPassword = async () => { throw new Error("must not prompt"); };
+            await publishCrossSigningKeys({hsApi: homeserver(), userId: USER, password: "pw", requestPassword, seeds, signer});
+            await publishCrossSigningKeys({hsApi: homeserver({uia: false}), userId: USER, requestPassword, seeds, signer});
+            assert.ok(true);
+        },
+        "fails clearly when a password is needed but unavailable": async assert => {
+            const signer = await nodeSigner();
+            const hsApi = homeserver();
+            await assert.rejects(publishCrossSigningKeys({hsApi, userId: USER, seeds, signer}), /requires the account password/);
+            assert.equal(hsApi.uploads.length, 1);
+        },
         "requires all three keys": async assert => {
             const signer = await nodeSigner();
             assert.throws(() => buildCrossSigningUpload(USER, {master: seeds.master, self_signing: seeds.self_signing}, signer), /user_signing/);
