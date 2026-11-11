@@ -78,13 +78,12 @@ export class RoomViewModelObservable extends ObservableValue {
     }
 
     async _updateStatus(status, session, generation) {
-        this.get()?.dispose();
-        this.set(null);
         const viewModel = await this._statusToViewModel(status);
         if (generation !== this._routeGeneration || this._disposed || this._session() !== session) {
             viewModel?.dispose();
             return;
         }
+        this.get()?.dispose();
         this.set(viewModel);
     }
 

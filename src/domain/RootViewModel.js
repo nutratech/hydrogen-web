@@ -61,8 +61,12 @@ export class RootViewModel extends ViewModel {
                 this._showPicker();
             }
         } else if (sessionId) {
+            const navigationSessionId = sessionId;
             // a workspace's secondary connection is opened through its workspace, never on its own
             const sourceSessionId = await this._sourceSessionIdForHidden(sessionId);
+            if (this.navigation.path.get("session")?.value !== navigationSessionId) {
+                return;
+            }
             if (sourceSessionId) {
                 // keep the rest of the URL (e.g. the room from a notification click)
                 const path = this.navigation.path.replace(this.navigation.segment("session", sourceSessionId));

@@ -50,7 +50,8 @@ function isValidRecord(id, record) {
         record.connections.every(c => typeof c?.id === "string" &&
             (c.role === "source" || c.role === "destination") && typeof c.sessionId === "string") &&
         record.connections.some(c => c.id === record.sourceConnectionId && c.role === "source") &&
-        record.rooms !== null && typeof record.rooms === "object" && !Array.isArray(record.rooms);
+        record.rooms !== null && typeof record.rooms === "object" && !Array.isArray(record.rooms) &&
+        Object.values(record.rooms).every(owner => record.connections.some(c => c.id === owner));
 }
 
 export class Workspace {
@@ -191,6 +192,9 @@ export class WorkspaceStorage {
 
     /** Point a connection at a new session, e.g. after re-authenticating its account. */
     setConnectionSession(workspaceId, connectionId, sessionId) {
+        if (typeof sessionId !== "string" || !sessionId) {
+            throw new TypeError("a session ID is required");
+        }
         return this._mutateWorkspace(workspaceId, record => {
             const connection = record.connections.find(c => c.id === connectionId);
             if (!connection) {

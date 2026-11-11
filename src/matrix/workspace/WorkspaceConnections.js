@@ -55,6 +55,7 @@ export class WorkspaceConnections {
         this._userIds = new Map();
         this._disposed = false;
         this.roomRouter = new RoomRouter({workspace, workspaceStorage, sessions: this._sessions, newRoomsOnDestination});
+        this._claimSourceRooms(sourceClient.session);
     }
 
     get workspace() {
@@ -203,6 +204,13 @@ export class WorkspaceConnections {
             if (this._sessions.delete(connectionId)) {
                 this.roomRouter.notifyChanged();
             }
+            if (status.status === ConnectionStatus.Unavailable) {
+                const client = this._clients.get(connectionId);
+                if (client) {
+                    this._clients.delete(connectionId);
+                    client.dispose();
+                }
+            }
         }
         this._statuses.set(connectionId, status);
         for (const listener of [...this._listeners]) {
@@ -223,6 +231,7 @@ export class WorkspaceConnections {
                 apply();
             } catch (err) {
                 console.error(`workspace: could not ${what} on connection ${connectionId}`, err);
+                this._setStatus(connectionId, {status: ConnectionStatus.Unavailable, error: err});
             }
         };
         const claim = roomIds => guarded("claim rooms", () => {
@@ -249,6 +258,43 @@ export class WorkspaceConnections {
         };
         const unsubscribes = [session.rooms.subscribe(handler), session.invites.subscribe(handler)];
         this._claimSubscriptions.set(connectionId, () => unsubscribes.forEach(unsubscribe => unsubscribe()));
+    }
+
+    _claimSourceRooms(session) {
+        const claim = key => {
+            try {
+                if (this.workspace.ownerOf(key) !== this.workspace.sourceConnectionId) {
+                    this.roomRouter.claimRoom(key, this.workspace.sourceConnectionId);
+                }
+            } catch (error) {
+                console.error("workspace: could not reclaim source room", error);
+            }
+        };
+        const handler = {
+            onAdd: key => claim(key),
+            onUpdate() {},
+            // the source left a room a secondary connection still holds: that connection takes it
+            onRemove: key => {
+                try {
+                    for (const [connectionId] of this.roomRouter.liveSessions()) {
+                        const unclaimed = this.roomRouter.unclaimedRoomIds(connectionId, [key])
+                            .filter(roomId => this.roomRouter.sessionForConnection(connectionId)?.rooms.get(roomId) ||
+                                this.roomRouter.sessionForConnection(connectionId)?.invites.get(roomId));
+                        if (unclaimed.length) {
+                            this.roomRouter.claimRooms(unclaimed, connectionId);
+                            break;
+                        }
+                    }
+                } catch (error) {
+                    console.error("workspace: could not reassign a room the source left", error);
+                }
+            },
+            onReset() {},
+        };
+        this._claimSubscriptions.set(this.workspace.sourceConnectionId, () => {
+            unsubscribes.forEach(unsubscribe => unsubscribe());
+        });
+        const unsubscribes = [session.rooms.subscribe(handler), session.invites.subscribe(handler)];
     }
 
     /**

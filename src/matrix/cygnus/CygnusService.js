@@ -140,6 +140,9 @@ export class CygnusService {
         if (this.identity.get()) {
             throw new Error("this session already has a Cygnus identity");
         }
+        if (!this._secretFetcher.hasSecretStorage) {
+            throw new Error("unlock secret storage before creating a Cygnus identity");
+        }
         const [master, selfSigning] = await Promise.all([
             this._secretFetcher.getSecret("m.cross_signing.master"),
             this._secretFetcher.getSecret("m.cross_signing.self_signing"),

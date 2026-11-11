@@ -25,4 +25,6 @@ export class UnavailableRoomViewModel extends ViewModel {
     get kind() {
         return "unavailable";
     }
+
+    focus() {}
 }

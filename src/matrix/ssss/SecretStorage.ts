@@ -73,6 +73,9 @@ export class SecretStorage {
         if (!accountData) {
             return;
         }
+        if (!accountData.content?.encrypted || Object.keys(accountData.content.encrypted).length === 0) {
+            return;
+        }
         return await this._decryptAccountData(accountData);
     }
 
@@ -260,7 +263,7 @@ export function tests() {
             await ssss.deleteSecret("s");
             assert.deepEqual(storage.entries.get("s").content.encrypted, {});
             assert.deepEqual(api.sent[1].content.encrypted, {});
-            await assert.rejects(ssss.readSecret("s"));
+            assert.equal(await ssss.readSecret("s"), undefined);
         },
     };
 }

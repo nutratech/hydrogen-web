@@ -120,7 +120,8 @@ export class WorkspaceRoomMap extends BaseObservableMap {
                     this.emitAdd(key, replacement);
                 }
             },
-            onReset: () => this._resync(),
+            // Do not replace handlers while the source map is iterating them.
+            onReset: () => queueMicrotask(() => this._resync()),
         };
     }
 

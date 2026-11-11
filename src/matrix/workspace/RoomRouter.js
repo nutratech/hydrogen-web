@@ -124,7 +124,7 @@ export class RoomRouter {
     /**
      * Record that `connectionId` owns `roomId`. Without this a room only the
      * destination sees would route to the source after a reload. Owning by the
-     * source keeps the map sparse.
+     * source keeps the map sparse. Source-held rooms are reclaimed on arrival.
      */
     claimRoom(roomId, connectionId) {
         this.claimRooms([roomId], connectionId);

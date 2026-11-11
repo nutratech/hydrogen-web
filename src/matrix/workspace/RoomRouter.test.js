@@ -153,8 +153,7 @@ export function tests() {
             const replacement = fakeSession("replacement");
             sessions.set("dest", replacement);
             roomRouter.notifyChanged();
-            await Promise.resolve();
-            await Promise.resolve();
+            await new Promise(resolve => setTimeout(resolve, 0));
 
             assert.deepEqual(replacement.observed, ["!r"]);
             assert.equal(observable.get().session, "replacement");

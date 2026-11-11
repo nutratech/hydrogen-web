@@ -141,7 +141,7 @@ export function tests() {
             assert.equal(connections.statusOf(dest).status, ConnectionStatus.Ready);
             assert.equal(connections.roomRouter.newRoomConnectionId, connections.workspace.sourceConnectionId);
         },
-        "connecting a destination records it before its hidden session info": async assert => {
+        "connecting a destination records the workspace and its hidden session info": async assert => {
             const env = setup();
             const connections = env.connections();
             const authData = {deviceId: "DEV", userId: "@a:new", accessToken: "t", homeserver: "https://new"};
@@ -296,7 +296,8 @@ export function tests() {
             assert.equal(status.needsReauth, true);
             assert.equal(connections.roomRouter.sessionForRoom("!dst"), undefined);
             assert.equal(connections.roomRouter.sessionForRoom("!r").name, "source");
-            assert.equal(client.disposed, false);
+            // an unavailable connection releases its client; signing in again creates a new one
+            assert.equal(client.disposed, true);
         },
         "a destination stopping for another reason stays connected": async assert => {
             const env = setup();
