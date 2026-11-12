@@ -577,7 +577,8 @@ export function tests() {
             assert.equal(drafts[0].state_key, "");
             assert.deepEqual(sent[0].content, {topic: "Lobby"});
             assert.equal(drafts[1].state_key, USER_U);
-            assert.deepEqual(sent[1].content, {membership: "kick", reason: "spam"});
+            // "kick" is not a membership: it is a leave event sent by someone else
+            assert.deepEqual(sent[1].content, {membership: "leave", reason: "spam"});
         },
         "creating an identity backs up the rotation key only after the custodian accepts": async assert => {
             const secrets = memorySecrets();

@@ -11,14 +11,36 @@ import {LRUCache} from "../../../../utils/LRUCache";
 
 const USER_EPOCH_EVENT_TYPE = "m.room.user_epoch";
 
-function copyMemberWithDisplayName(member, displayName) {
+function copyMemberWithDisplayName(member, displayName, epochHeight) {
     return new RoomMember({
         roomId: member.roomId,
         userId: member.userId,
         membership: member.membership,
         avatarUrl: member.avatarUrl,
         displayName,
+        cygnusDisplayName: displayName,
+        cygnusEpochHeight: epochHeight,
     });
+}
+
+/**
+ * Keep the newest epoch-derived name. A member event without an epoch (a
+ * profile change, leave or rejoin) must not revert a name learned earlier, and
+ * a replayed older epoch must not replace a newer one.
+ */
+function mergeEpoch(existing, incoming) {
+    const existingName = existing.cygnusDisplayName;
+    if (existingName === undefined) {
+        return incoming;
+    }
+    const existingHeight = existing.cygnusEpochHeight;
+    const incomingName = incoming.cygnusDisplayName;
+    if (incomingName === undefined ||
+        (Number.isFinite(existingHeight) && Number.isFinite(incoming.cygnusEpochHeight) &&
+            incoming.cygnusEpochHeight < existingHeight)) {
+        return copyMemberWithDisplayName(incoming, existingName, existingHeight);
+    }
+    return incoming;
 }
 
 export class MemberWriter {
@@ -39,11 +61,12 @@ export class MemberWriter {
                 existingMember = new RoomMember(memberData);
             }
         }
+        const memberToWrite = existingMember ? mergeEpoch(existingMember, member) : member;
         // either never heard of the member, or something changed
-        if (!existingMember || !existingMember.equals(member)) {
-            txn.roomMembers.set(member.serialize());
-            this._cache.set(member);
-            return new MemberChange(member, existingMember?.membership);
+        if (!existingMember || !existingMember.equals(memberToWrite)) {
+            txn.roomMembers.set(memberToWrite.serialize());
+            this._cache.set(memberToWrite);
+            return new MemberChange(memberToWrite, existingMember?.membership);
         }
     }
 
@@ -103,11 +126,16 @@ export class MemberSync {
         if (!member) {
             return member;
         }
-        const displayName = this._epochDisplayNames.get(member.userId)?.displayName;
-        if (!displayName || member.displayName === displayName) {
+        const epoch = this._epochDisplayNames.get(member.userId);
+        if (!epoch) {
             return member;
         }
-        return copyMemberWithDisplayName(member, displayName);
+        if (member.displayName === epoch.displayName &&
+            member.cygnusEpochHeight === epoch.height &&
+            member.cygnusDisplayName === epoch.displayName) {
+            return member;
+        }
+        return copyMemberWithDisplayName(member, epoch.displayName, epoch.height);
     }
 
     get _roomId() {
@@ -203,16 +231,16 @@ export class MemberSync {
         }
         // A user epoch can arrive in a sync without a member event of its own.
         // Refresh the stored member so the new display_user_id is shown.
-        for (const [userId, {displayName}] of this._epochDisplayNames) {
+        for (const [userId, {displayName, height}] of this._epochDisplayNames) {
             if (writtenMembers.has(userId)) {
                 continue;
             }
             const member = await this._memberWriter.lookupMember(userId, txn);
-            if (!member || member.displayName === displayName) {
+            if (!member || (member.cygnusDisplayName === displayName && member.cygnusEpochHeight === height)) {
                 continue;
             }
             const memberChange = await this._memberWriter._writeMember(
-                copyMemberWithDisplayName(member, displayName), txn);
+                copyMemberWithDisplayName(member, displayName, height), txn);
             if (memberChange) {
                 memberChanges.set(memberChange.userId, memberChange);
             }
@@ -511,6 +539,37 @@ export function tests() {
             ], [], false);
             await memberSync.write(txn);
             assert.equal(txn.members.get(alice).displayName, "@alice:new.tld");
+        },
+        "a later member event without an epoch keeps the epoch display name": async assert => {
+            const writer = new MemberWriter(roomId);
+            const stored = new RoomMember({
+                roomId, userId: alice, membership: "join",
+                displayName: "@alice:hs.tld",
+                cygnusDisplayName: "@alice:hs.tld",
+                cygnusEpochHeight: 2,
+            });
+            const txn = createStorage([stored]);
+            const memberSync = writer.prepareMemberSync([], [createMemberEvent("join", alice)], false);
+            await memberSync.write(txn);
+            assert.equal(txn.members.get(alice).displayName, "@alice:hs.tld");
+            assert.equal(txn.members.get(alice).cygnusEpochHeight, 2);
+        },
+        "a replayed older epoch does not replace a stored newer one": async assert => {
+            const writer = new MemberWriter(roomId);
+            const stored = new RoomMember({
+                roomId, userId: alice, membership: "join",
+                displayName: "@alice:new.tld",
+                cygnusDisplayName: "@alice:new.tld",
+                cygnusEpochHeight: 2,
+            });
+            const txn = createStorage([stored]);
+            const memberSync = writer.prepareMemberSync([
+                createEpochEvent(alice, "@alice:old.tld", 1),
+            ], [], false);
+            const changes = await memberSync.write(txn);
+            assert.equal(changes.size, 0);
+            assert.equal(txn.members.get(alice).displayName, "@alice:new.tld");
+            assert.equal(txn.members.get(alice).cygnusEpochHeight, 2);
         },
     };
 }

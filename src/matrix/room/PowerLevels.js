@@ -47,14 +47,18 @@ export class PowerLevels {
         return this._myLevel >= this._getActionLevel("ban");
     }
 
-    /** Another member can be kicked only below the sender's own level. */
-    canKickUser(userId) {
-        return this.canKick && this.getUserLevel(userId) < this._myLevel;
+    /** Another member can be kicked only below the sender's own level (and while still present). */
+    canKickUser(userId, membership) {
+        return this.canKick && this._canActOn(userId, membership);
     }
 
-    /** Another member can be banned at or below the sender's own level. */
-    canBanUser(userId) {
-        return this.canBan && this.getUserLevel(userId) <= this._myLevel;
+    /** Another member can be banned only below the sender's own level (and while not already banned). */
+    canBanUser(userId, membership) {
+        return this.canBan && membership !== "ban" && this._canActOn(userId, membership);
+    }
+
+    _canActOn(userId, membership) {
+        return membership !== "leave" && this.getUserLevel(userId) < this._myLevel;
     }
 
     get _myLevel() {
@@ -173,13 +177,16 @@ export function tests() {
             assert.equal(pl.canRedactFromSender(alice), false);
             assert.equal(pl.canSendType("m.room.message"), false);
         },
-        "kick requires a higher level but ban may be equal": assert => {
+        "kick and ban require a strictly higher level": assert => {
             const event = {content: {users: {[alice]: 50, [bob]: 25, [charly]: 50}}};
             const pl = new PowerLevels({powerLevelEvent: event, ownUserId: alice, membership: "join"});
-            assert.equal(pl.canKickUser(bob), true);
-            assert.equal(pl.canKickUser(charly), false);
-            assert.equal(pl.canBanUser(charly), true);
-            assert.equal(pl.canBanUser(alice), true);
+            assert.equal(pl.canKickUser(bob, "join"), true);
+            assert.equal(pl.canKickUser(charly, "join"), false);
+            assert.equal(pl.canBanUser(bob, "join"), true);
+            assert.equal(pl.canBanUser(charly, "join"), false);
+            assert.equal(pl.canBanUser(alice, "join"), false);
+            assert.equal(pl.canKickUser(bob, "leave"), false);
+            assert.equal(pl.canBanUser(bob, "ban"), false);
         },
     }
 }

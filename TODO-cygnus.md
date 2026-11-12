@@ -39,7 +39,8 @@ Nothing has run against a real homeserver yet; `../congruent` will be the first.
       Matrix ID to a principal for Cygnus rooms, and member details can kick or
       ban a principal through device-signed `m.room.member` events
       (`lookupPrincipal` → `sendMembershipEvent`). The plain `/invite` and
-      `/state` paths are no longer used for Cygnus rooms.
+      `/state` paths are no longer used for Cygnus rooms. There is still no
+      dedicated invite UI beyond the existing panel, and no unban action.
 - [x] **Signed state events in general.** `Room.sendStateEvent` routes through
       `CygnusService.sendStateEvent` (and therefore `CygnusEventSigner`) for
       Cygnus rooms, with helpers for name, topic, join rules and power levels.
@@ -53,7 +54,9 @@ Nothing has run against a real homeserver yet; `../congruent` will be the first.
       now applies each member's `m.room.user_epoch` `display_user_id` to the
       stored member, including epochs that arrive without a member event and
       newer epochs replacing older ones. The principal remains the member's
-      `userId`, so the member panel can still show it.
+      `userId`, so the member panel can still show it. The timeline does not yet
+      show the principal on hover, and the client trusts the epoch sender
+      instead of verifying it.
 - [x] **Room indicator.** Nothing in the room list, header or room details shows
       that a room is Cygnus, or its room version.
 - [ ] **Verification status.** `CygnusVerifier` can check event IDs, device and

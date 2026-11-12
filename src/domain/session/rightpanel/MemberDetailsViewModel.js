@@ -145,11 +145,13 @@ export class MemberDetailsViewModel extends ViewModel {
     }
 
     get canKick() {
-        return this._isOtherMember && !!this._powerLevelsObservable.get()?.canKickUser(this._member.userId);
+        return this._isOtherMember &&
+            !!this._powerLevelsObservable.get()?.canKickUser(this._member.userId, this._member.membership);
     }
 
     get canBan() {
-        return this._isOtherMember && !!this._powerLevelsObservable.get()?.canBanUser(this._member.userId);
+        return this._isOtherMember &&
+            !!this._powerLevelsObservable.get()?.canBanUser(this._member.userId, this._member.membership);
     }
 
     get _isOtherMember() {

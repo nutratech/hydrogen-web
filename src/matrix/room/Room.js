@@ -549,7 +549,8 @@ export class Room extends BaseRoom {
                 if (!cygnus) throw new Error("Cygnus is unavailable for this room");
                 return cygnus.sendStateEvent(this.id, type, content, stateKey, log);
             }
-            await this._hsApi.sendState(this.id, type, stateKey, content, {log}).response();
+            const response = await this._hsApi.sendState(this.id, type, stateKey, content, {log}).response();
+            return response.event_id;
         });
     }
 
@@ -600,11 +601,14 @@ export class Room extends BaseRoom {
             const principal = isPrincipal(userId) ? userId : await cygnus.lookupPrincipal(userId, log);
             return cygnus.sendMembershipEvent(this.id, principal, membership, reason, log);
         }
-        const content = {membership};
+        // A kick is an ordinary leave event sent by someone else; "kick" is not
+        // a Matrix membership value.
+        const content = {membership: membership === "kick" ? "leave" : membership};
         if (reason) {
             content.reason = reason;
         }
-        await this._hsApi.sendState(this.id, "m.room.member", userId, content, {log}).response();
+        const response = await this._hsApi.sendState(this.id, "m.room.member", userId, content, {log}).response();
+        return response.event_id;
     }
 
     /* called by BaseRoom to pass pendingEvents when opening the timeline */
