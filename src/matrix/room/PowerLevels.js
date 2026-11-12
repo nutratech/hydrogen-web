@@ -35,6 +35,28 @@ export class PowerLevels {
         return this._myLevel >= this._getActionLevel("redact");
     }
 
+    get canInvite() {
+        return this._myLevel >= this._getActionLevel("invite");
+    }
+
+    get canKick() {
+        return this._myLevel >= this._getActionLevel("kick");
+    }
+
+    get canBan() {
+        return this._myLevel >= this._getActionLevel("ban");
+    }
+
+    /** Another member can be kicked only below the sender's own level. */
+    canKickUser(userId) {
+        return this.canKick && this.getUserLevel(userId) < this._myLevel;
+    }
+
+    /** Another member can be banned at or below the sender's own level. */
+    canBanUser(userId) {
+        return this.canBan && this.getUserLevel(userId) <= this._myLevel;
+    }
+
     get _myLevel() {
         if (this._membership !== "join") {
             return Number.MIN_SAFE_INTEGER;
@@ -150,6 +172,14 @@ export function tests() {
             assert.equal(pl.canRedact, false);
             assert.equal(pl.canRedactFromSender(alice), false);
             assert.equal(pl.canSendType("m.room.message"), false);
+        },
+        "kick requires a higher level but ban may be equal": assert => {
+            const event = {content: {users: {[alice]: 50, [bob]: 25, [charly]: 50}}};
+            const pl = new PowerLevels({powerLevelEvent: event, ownUserId: alice, membership: "join"});
+            assert.equal(pl.canKickUser(bob), true);
+            assert.equal(pl.canKickUser(charly), false);
+            assert.equal(pl.canBanUser(charly), true);
+            assert.equal(pl.canBanUser(alice), true);
         },
     }
 }

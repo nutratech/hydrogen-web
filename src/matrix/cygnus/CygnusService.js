@@ -581,6 +581,26 @@ export class CygnusService {
         return eventId;
     }
 
+    /**
+     * Send a state event (name, topic, power levels, join rules, membership…) in a
+     * Cygnus room. Cygnus rooms cannot use the plain `/state` endpoint: every
+     * user-authored event must also carry a device signature (§5.2.1).
+     */
+    async sendStateEvent(roomId, type, content, stateKey = "", log) {
+        const identity = this._requireIdentity();
+        const {eventId} = await this._signer(identity).send({roomId, type, stateKey, content}, {log});
+        return eventId;
+    }
+
+    /** Send a device-signed membership event for another principal (invite, kick or ban). */
+    async sendMembershipEvent(roomId, principal, membership, reason, log) {
+        const content = {membership};
+        if (reason) {
+            content.reason = reason;
+        }
+        return this.sendStateEvent(roomId, "m.room.member", content, principal, log);
+    }
+
     /** Resolve a Matrix user ID to its principal, for invites, kicks and bans (§9). */
     async lookupPrincipal(userId, log) {
         await this.load(log);

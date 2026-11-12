@@ -17,7 +17,7 @@ import {AttachmentUpload} from "./AttachmentUpload.js";
 import {DecryptionSource} from "../e2ee/common";
 import {iterateResponseStateEvents} from "./common";
 import {PowerLevels, EVENT_TYPE as POWERLEVELS_EVENT_TYPE } from "./PowerLevels.js";
-import {isCygnusRoomVersion} from "../cygnus/constants.js";
+import {isCygnusRoomVersion, isPrincipal} from "../cygnus/constants.js";
 
 const EVENT_ENCRYPTED_TYPE = "m.room.encrypted";
 
@@ -536,11 +536,75 @@ export class Room extends BaseRoom {
         });
     }
 
-    async inviteUser(userId, reason) {
+    /**
+     * Send a state event in this room. Cygnus rooms route it through the
+     * device-signed `send_signed` path instead of the plain `/state` endpoint.
+     */
+    sendStateEvent(type, stateKey, content, log = null) {
+        return this._platform.logger.wrapOrRun(log, "sendState", async log => {
+            log.set("id", this.id);
+            log.set("type", type);
+            if (this.isCygnus) {
+                const cygnus = this._getCygnus?.();
+                if (!cygnus) throw new Error("Cygnus is unavailable for this room");
+                return cygnus.sendStateEvent(this.id, type, content, stateKey, log);
+            }
+            await this._hsApi.sendState(this.id, type, stateKey, content, {log}).response();
+        });
+    }
+
+    setName(name, log = null) {
+        return this.sendStateEvent("m.room.name", "", {name}, log);
+    }
+
+    setTopic(topic, log = null) {
+        return this.sendStateEvent("m.room.topic", "", {topic}, log);
+    }
+
+    setJoinRule(joinRule, log = null) {
+        return this.sendStateEvent("m.room.join_rules", "", {join_rule: joinRule}, log);
+    }
+
+    setPowerLevels(content, log = null) {
+        return this.sendStateEvent("m.room.power_levels", "", content, log);
+    }
+
+    async inviteUser(userId, reason, log = null) {
         if (!userId) {
             throw new Error("userId is null/undefined");
         }
+        if (this.isCygnus) {
+            const cygnus = this._getCygnus?.();
+            if (!cygnus) throw new Error("Cygnus is unavailable for this room");
+            const principal = isPrincipal(userId) ? userId : await cygnus.lookupPrincipal(userId, log);
+            return cygnus.sendMembershipEvent(this.id, principal, "invite", reason, log);
+        }
         await this._hsApi.invite(this.id, userId, reason).response();
+    }
+
+    async kickUser(userId, reason, log = null) {
+        return this._changeOtherMembership("kick", userId, reason, log);
+    }
+
+    async banUser(userId, reason, log = null) {
+        return this._changeOtherMembership("ban", userId, reason, log);
+    }
+
+    async _changeOtherMembership(membership, userId, reason, log) {
+        if (!userId) {
+            throw new Error("userId is null/undefined");
+        }
+        if (this.isCygnus) {
+            const cygnus = this._getCygnus?.();
+            if (!cygnus) throw new Error("Cygnus is unavailable for this room");
+            const principal = isPrincipal(userId) ? userId : await cygnus.lookupPrincipal(userId, log);
+            return cygnus.sendMembershipEvent(this.id, principal, membership, reason, log);
+        }
+        const content = {membership};
+        if (reason) {
+            content.reason = reason;
+        }
+        await this._hsApi.sendState(this.id, "m.room.member", userId, content, {log}).response();
     }
 
     /* called by BaseRoom to pass pendingEvents when opening the timeline */

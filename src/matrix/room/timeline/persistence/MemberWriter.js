@@ -9,6 +9,18 @@ Please see LICENSE files in the repository root for full details.
 import {MemberChange, RoomMember, EVENT_TYPE as MEMBER_EVENT_TYPE} from "../../members/RoomMember.js";
 import {LRUCache} from "../../../../utils/LRUCache";
 
+const USER_EPOCH_EVENT_TYPE = "m.room.user_epoch";
+
+function copyMemberWithDisplayName(member, displayName) {
+    return new RoomMember({
+        roomId: member.roomId,
+        userId: member.userId,
+        membership: member.membership,
+        avatarUrl: member.avatarUrl,
+        displayName,
+    });
+}
+
 export class MemberWriter {
     constructor(roomId) {
         this._roomId = roomId;
@@ -58,9 +70,44 @@ export class MemberSync {
         this._timelineEvents = timelineEvents;
         this._hasFetchedMembers = hasFetchedMembers;
         this._newStateMembers = null;
+        // Cygnus principals are keyed by principal; the display name lives in
+        // the principal's m.room.user_epoch rather than on the member event.
+        this._epochDisplayNames = new Map();
+        this._collectEpochDisplayNames(stateEvents);
+        this._collectEpochDisplayNames(timelineEvents);
         if (stateEvents) {
             this._newStateMembers = this._stateEventsToMembers(stateEvents);
         }
+    }
+
+    _collectEpochDisplayNames(events) {
+        if (!Array.isArray(events)) {
+            return;
+        }
+        for (const event of events) {
+            const principal = event?.state_key;
+            const displayName = event?.content?.display_user_id;
+            if (event?.type !== USER_EPOCH_EVENT_TYPE ||
+                typeof principal !== "string" || typeof displayName !== "string" || !displayName) {
+                continue;
+            }
+            const height = Number(event.content?.height);
+            const current = this._epochDisplayNames.get(principal);
+            if (!current || !Number.isFinite(current.height) || !Number.isFinite(height) || height >= current.height) {
+                this._epochDisplayNames.set(principal, {displayName, height});
+            }
+        }
+    }
+
+    _withEpochDisplayName(member) {
+        if (!member) {
+            return member;
+        }
+        const displayName = this._epochDisplayNames.get(member.userId)?.displayName;
+        if (!displayName || member.displayName === displayName) {
+            return member;
+        }
+        return copyMemberWithDisplayName(member, displayName);
     }
 
     get _roomId() {
@@ -71,7 +118,7 @@ export class MemberSync {
         let members;
         for (const event of stateEvents) {
             if (event.type === MEMBER_EVENT_TYPE) {
-                const member = RoomMember.fromMemberEvent(this._roomId, event);
+                const member = this._withEpochDisplayName(RoomMember.fromMemberEvent(this._roomId, event));
                 if (member) {
                     if (!members) {
                         members = new Map();
@@ -90,7 +137,7 @@ export class MemberSync {
             const e = timelineEvents[i];
             const userId = e.state_key;
             if (e.type === MEMBER_EVENT_TYPE && !members?.has(userId)) {
-                const member = RoomMember.fromMemberEvent(this._roomId, e);
+                const member = this._withEpochDisplayName(RoomMember.fromMemberEvent(this._roomId, e));
                 if (member) {
                     if (!members) {
                         members = new Map();
@@ -119,6 +166,7 @@ export class MemberSync {
 
     async write(txn) {
         const memberChanges = new Map();
+        const writtenMembers = new Set();
         let newTimelineMembers;
         if (this._timelineEvents) {
             newTimelineMembers = this._timelineEventsToMembers(this._timelineEvents);
@@ -126,6 +174,7 @@ export class MemberSync {
         if (this._newStateMembers) {
             for (const member of this._newStateMembers.values()) {
                 if (!newTimelineMembers?.has(member.userId)) {
+                    writtenMembers.add(member.userId);
                     const memberChange = await this._memberWriter._writeMember(member, txn);
                     if (memberChange) {
                         // if the member event appeared only in the state section,
@@ -145,10 +194,27 @@ export class MemberSync {
         }
         if (newTimelineMembers) {
             for (const member of newTimelineMembers.values()) {
+                writtenMembers.add(member.userId);
                 const memberChange = await this._memberWriter._writeMember(member, txn);
                 if (memberChange) {
                     memberChanges.set(memberChange.userId, memberChange);
                 }
+            }
+        }
+        // A user epoch can arrive in a sync without a member event of its own.
+        // Refresh the stored member so the new display_user_id is shown.
+        for (const [userId, {displayName}] of this._epochDisplayNames) {
+            if (writtenMembers.has(userId)) {
+                continue;
+            }
+            const member = await this._memberWriter.lookupMember(userId, txn);
+            if (!member || member.displayName === displayName) {
+                continue;
+            }
+            const memberChange = await this._memberWriter._writeMember(
+                copyMemberWithDisplayName(member, displayName), txn);
+            if (memberChange) {
+                memberChanges.set(memberChange.userId, memberChange);
             }
         }
         return memberChanges;
@@ -413,5 +479,48 @@ export function tests() {
             const changes = await memberSync.write(txn);
             assert.equal(changes.size, 0);
         },
+        "Cygnus member display name comes from the user epoch": async assert => {
+            const writer = new MemberWriter(roomId);
+            const txn = createStorage();
+            const memberEvent = createMemberEvent("join", alice);
+            const epoch = createEpochEvent(alice, "@alice:hs.tld", 0);
+            const memberSync = writer.prepareMemberSync([memberEvent, epoch], [], false);
+            const changes = await memberSync.write(txn);
+            assert.equal(changes.size, 1);
+            assert.equal(changes.get(alice).member.displayName, "@alice:hs.tld");
+            assert.equal(txn.members.get(alice).displayName, "@alice:hs.tld");
+        },
+        "a later user epoch updates a stored member without a member event": async assert => {
+            const writer = new MemberWriter(roomId);
+            const txn = createStorage([member("join", alice, "@alice:old.tld")]);
+            const epoch = createEpochEvent(alice, "@alice:new.tld", 1);
+            const memberSync = writer.prepareMemberSync([epoch], [], false);
+            const changes = await memberSync.write(txn);
+            assert.equal(changes.size, 1);
+            assert.equal(changes.get(alice).member.displayName, "@alice:new.tld");
+            assert.equal(txn.members.get(alice).displayName, "@alice:new.tld");
+        },
+        "an older user epoch does not override a newer one": async assert => {
+            const writer = new MemberWriter(roomId);
+            const txn = createStorage();
+            const memberEvent = createMemberEvent("join", alice);
+            const memberSync = writer.prepareMemberSync([
+                memberEvent,
+                createEpochEvent(alice, "@alice:new.tld", 2),
+                createEpochEvent(alice, "@alice:old.tld", 1),
+            ], [], false);
+            await memberSync.write(txn);
+            assert.equal(txn.members.get(alice).displayName, "@alice:new.tld");
+        },
+    };
+}
+
+function createEpochEvent(principal, displayUserId, height) {
+    return {
+        type: "m.room.user_epoch",
+        state_key: principal,
+        sender: principal,
+        content: {display_user_id: displayUserId, height},
+        event_id: `$epoch${height}`,
     };
 }

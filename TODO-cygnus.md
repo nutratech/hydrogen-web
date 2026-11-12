@@ -27,24 +27,33 @@ Nothing has run against a real homeserver yet; `../congruent` will be the first.
 - [x] **Rejoining an archived room uses `/join`** (`ArchivedRoom.js`).
 - [x] **Group calls send state with `hsApi.sendState`** (`GroupCall.ts`). Hide
       calls in Cygnus rooms or route them through signed sends.
+- [ ] **Invites that arrive before the identity loads.** `_getMyInvite` only
+      knows the Matrix ID until `CygnusService.identity` is set, so a Cygnus
+      invite in that window is not stored. Defer invite processing until the
+      stored identity has loaded, or retry it once the principal is known
+      (`pr.2.md`, `Invite.js:287`).
 
 ## Missing UI
 
-- [ ] **Room membership actions.** Invite, kick and ban need the target's
-      principal: `CygnusService.lookupPrincipal` exists but nothing calls it.
-      Hydrogen has no invite UI at all yet; add one that resolves a Matrix ID to
-      a principal for Cygnus rooms.
-- [ ] **Signed state events in general.** Only create/join/join_rules/name/topic
-      are sent (all from `CygnusRooms`). Add a `sendStateEvent` path (via
-      `CygnusEventSigner`) for renaming, changing the topic, power levels and
-      join rules after creation.
+- [x] **Room membership actions.** The existing invite panel now resolves a
+      Matrix ID to a principal for Cygnus rooms, and member details can kick or
+      ban a principal through device-signed `m.room.member` events
+      (`lookupPrincipal` → `sendMembershipEvent`). The plain `/invite` and
+      `/state` paths are no longer used for Cygnus rooms.
+- [x] **Signed state events in general.** `Room.sendStateEvent` routes through
+      `CygnusService.sendStateEvent` (and therefore `CygnusEventSigner`) for
+      Cygnus rooms, with helpers for name, topic, join rules and power levels.
+      Callers still need to supply the complete content for power levels and
+      join rules.
 - [ ] **Avatar, alias and encryption** for Cygnus rooms. Create Room hides
       encryption and ignores avatar/alias when the Cygnus box is ticked.
 - [ ] **Join by alias.** Join needs a `!roomid`; aliases aren't resolved for
       Cygnus.
-- [ ] **Display names.** Principals show as raw `@<43 chars>`. Read
-      `display_user_id` from each member's `m.room.user_epoch` and show that,
-      with the principal on hover or in the member panel.
+- [x] **Display names.** Principals show as raw `@<43 chars>`. `MemberWriter`
+      now applies each member's `m.room.user_epoch` `display_user_id` to the
+      stored member, including epochs that arrive without a member event and
+      newer epochs replacing older ones. The principal remains the member's
+      `userId`, so the member panel can still show it.
 - [x] **Room indicator.** Nothing in the room list, header or room details shows
       that a room is Cygnus, or its room version.
 - [ ] **Verification status.** `CygnusVerifier` can check event IDs, device and
@@ -171,7 +180,13 @@ explicitly.
       senders, a different event ID hash, device-signature authorization, an
       extra state-resolution pass, and Cygnus join-handshake behavior. Implement
       the six client-server endpoints and these room-version changes, then
-      validate them against Hydrogen.
+      validate them against Hydrogen. Nothing in `congruent` references Cygnus
+      today: first add the `cygnus-core` dependency (`state-res` feature), a
+      persistent account→principal/chain store plus the custodian signing key
+      and revoked-device list, then the routes (only advertise `tk.nutra.cygnus`
+      once all six are present), and finally register the room version and its
+      PDU/auth/state-resolution/join changes. This is homeserver work, not a
+      small client follow-up.
 
 ## Upstream dependencies
 

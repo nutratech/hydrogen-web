@@ -21,6 +21,7 @@ export class MemberDetailsViewModel extends ViewModel {
         this._isEncrypted = options.isEncrypted;
         this._powerLevelsObservable = options.powerLevelsObservable;
         this._session = options.session;
+        this._room = options.room;
         this.track(this._powerLevelsObservable.subscribe(() => this._onPowerLevelsChange()));
         this.track(this._observableMember.subscribe( () => this._onMemberChange()));
         this._userTrust = undefined;
@@ -141,6 +142,37 @@ export class MemberDetailsViewModel extends ViewModel {
 
     get isEncrypted() {
         return this._isEncrypted;
+    }
+
+    get canKick() {
+        return this._isOtherMember && !!this._powerLevelsObservable.get()?.canKickUser(this._member.userId);
+    }
+
+    get canBan() {
+        return this._isOtherMember && !!this._powerLevelsObservable.get()?.canBanUser(this._member.userId);
+    }
+
+    get _isOtherMember() {
+        // Cygnus rooms key members by principal, so the Matrix ID alone is not enough
+        return !!this._room && !this._room.ownUserIds.includes(this._member.userId);
+    }
+
+    async kickUser(reason) {
+        if (!this.canKick) {
+            return;
+        }
+        await this.logAndCatch("MemberDetailsViewModel.kickUser", async log => {
+            await this._room.kickUser(this.userId, reason, log);
+        });
+    }
+
+    async banUser(reason) {
+        if (!this.canBan) {
+            return;
+        }
+        await this.logAndCatch("MemberDetailsViewModel.banUser", async log => {
+            await this._room.banUser(this.userId, reason, log);
+        });
     }
 
     get powerLevel() {

@@ -45,7 +45,28 @@ export class MemberDetailsView extends TemplateView {
     _createOptions(t, vm) {
         const options = [
             t.a({href: vm.linkToUser, target: "_blank", rel: "noopener"}, vm.i18n`Open Link to User`),
-            t.button({className: "text", onClick: () => vm.openDirectMessage()}, vm.i18n`Open direct message`)
+            t.button({className: "text", onClick: () => vm.openDirectMessage()}, vm.i18n`Open direct message`),
+            t.if(vm => vm.canKick, t => t.button({
+                className: "text",
+                onClick: () => {
+                    const reason = prompt(vm.i18n`Reason for kicking ${vm.name} (optional):`);
+                    if (reason !== null) {
+                        vm.kickUser(reason);
+                    }
+                },
+            }, vm.i18n`Kick`)),
+            t.if(vm => vm.canBan, t => t.button({
+                className: "text",
+                onClick: () => {
+                    if (!confirm(vm.i18n`Ban ${vm.name} from this room?`)) {
+                        return;
+                    }
+                    const reason = prompt(vm.i18n`Reason for banning ${vm.name} (optional):`);
+                    if (reason !== null) {
+                        vm.banUser(reason);
+                    }
+                },
+            }, vm.i18n`Ban`)),
         ];
         if (vm.features.crossSigning) {
             if (vm.canVerifyUser) {

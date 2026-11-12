@@ -561,6 +561,24 @@ export function tests() {
             assert.deepEqual(bodies[0].via, ["second.example.net"]);
             assert.equal("via" in bodies[1], false);
         },
+        "service sends state and other-principal membership events as device-signed drafts": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity();
+            const {api, sent, drafts} = assistedApi(crypto, identity);
+            api.cygnusLookupPrincipal = () => request({principal: USER_U});
+            const service = new CygnusService({
+                storage, hsApi: api, userId: "@alice:chat.example.org", deviceId: "HYDROGEN",
+            });
+            service._crypto = crypto;
+            service._isSupported = true;
+            service.identity.set(identity);
+            await service.sendStateEvent(ROOM_ID, "m.room.topic", {topic: "Lobby"});
+            await service.sendMembershipEvent(ROOM_ID, USER_U, "kick", "spam");
+            assert.deepEqual(sent.map(e => e.type), ["m.room.topic", "m.room.member"]);
+            assert.equal(drafts[0].state_key, "");
+            assert.deepEqual(sent[0].content, {topic: "Lobby"});
+            assert.equal(drafts[1].state_key, USER_U);
+            assert.deepEqual(sent[1].content, {membership: "kick", reason: "spam"});
+        },
         "creating an identity backs up the rotation key only after the custodian accepts": async assert => {
             const secrets = memorySecrets();
             const {calls} = await aliceIdentity([], {secretFetcher: secrets});
