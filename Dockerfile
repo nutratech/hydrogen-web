@@ -1,5 +1,8 @@
-FROM --platform=${BUILDPLATFORM} docker.io/node:alpine as builder
-RUN apk add --no-cache git python3 build-base
+FROM --platform=${BUILDPLATFORM} docker.io/node:22-alpine AS builder
+# Install yarn explicitly: recent Node images no longer bundle it (and corepack is going away)
+RUN apk add --no-cache git python3 build-base \
+  && rm -f /usr/local/bin/yarn /usr/local/bin/yarnpkg \
+  && npm install -g yarn@1.22.22
 
 WORKDIR /app
 
@@ -15,7 +18,7 @@ RUN yarn build
 RUN mv -f target/config.json /config.json.bundled \
   && ln -sf /tmp/config.json target/config.json
 
-FROM --platform=${TARGETPLATFORM} docker.io/nginxinc/nginx-unprivileged:alpine
+FROM docker.io/nginxinc/nginx-unprivileged:alpine
 
 # Copy the dynamic config script
 COPY ./docker/dynamic-config.sh /docker-entrypoint.d/99-dynamic-config.sh
