@@ -22,7 +22,11 @@ export function isTrustedEpochSender(event) {
     if (typeof sender !== "string" || !sender) {
         return false;
     }
-    return sender === event.state_key || sender === event.content?.custodian;
+    // `custodian` is the event's own claim, so it only counts when it is a
+    // server principal (`~`); a user could otherwise name themselves.
+    const custodian = event.content?.custodian;
+    return sender === event.state_key ||
+        (typeof custodian === "string" && custodian.startsWith("~") && sender === custodian);
 }
 
 function copyMemberWithDisplayName(member, displayName, epochHeight) {
@@ -595,6 +599,17 @@ export function tests() {
             ], [], false);
             await memberSync.write(txn);
             assert.equal(txn.members.get(alice).displayName, "@alice:hs.tld");
+        },
+        "a third party cannot apply an epoch by naming itself as custodian": async assert => {
+            const writer = new MemberWriter(roomId);
+            const txn = createStorage([]);
+            const mallory = "@MMMMPGgj2s7JHMwFxSEOHfFYM_K0PDpnhXEMYwMgQuo";
+            const memberSync = writer.prepareMemberSync([
+                createMemberEvent("join", alice),
+                createEpochEvent(alice, "@ceo:bank.tld", 1, mallory, {custodian: mallory}),
+            ], [], false);
+            await memberSync.write(txn);
+            assert.equal(txn.members.get(alice).cygnusDisplayName, undefined);
         },
         "a third party cannot apply an epoch by naming a different custodian": async assert => {
             const writer = new MemberWriter(roomId);
