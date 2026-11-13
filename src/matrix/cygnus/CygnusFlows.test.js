@@ -10,6 +10,8 @@ import {ConnectionError, HomeServerError} from "../error.js";
 import {CygnusRooms} from "./CygnusRooms.js";
 import {CygnusService} from "./CygnusService.js";
 import {Room} from "../room/Room.js";
+import {PowerLevels} from "../room/PowerLevels.js";
+import {MemberDetailsViewModel} from "../../domain/session/rightpanel/MemberDetailsViewModel.js";
 import {CYGNUS_ROOM_VERSION} from "./constants.js";
 import anotherjson from "another-json";
 import {webcrypto} from "node:crypto";
@@ -627,6 +629,51 @@ export function tests() {
             await cygnusRoom.inviteUser("@alice:chat.example.org", "hello");
             assert.equal(cygnusCalls[2].principal, USER_U);
             assert.equal(cygnusCalls[2].membership, "invite");
+        },
+        "member details gate kick and ban by level and current membership": async assert => {
+            const alice = "@alice:hs.tld";
+            const bob = "@bob:hs.tld";
+            const powerLevels = new PowerLevels({
+                powerLevelEvent: {content: {users: {[alice]: 50, [bob]: 25}}},
+                ownUserId: alice,
+                membership: "join",
+            });
+            // Bypass the constructor; only the getters under test need these fields.
+            const viewModelFor = (member, ownUserIds = [alice]) => {
+                const vm = Object.create(MemberDetailsViewModel.prototype);
+                vm._member = member;
+                vm._powerLevelsObservable = {get: () => powerLevels};
+                vm._room = {ownUserIds};
+                return vm;
+            };
+            const member = (userId, membership) => ({userId, membership});
+
+            const present = viewModelFor(member(bob, "join"));
+            assert.equal(present.canKick, true);
+            assert.equal(present.canBan, true);
+
+            // A leave can still be preemptively banned, but not kicked.
+            const left = viewModelFor(member(bob, "leave"));
+            assert.equal(left.canKick, false);
+            assert.equal(left.canBan, true);
+
+            // A banned member cannot be kicked (that would unban) or re-banned.
+            const banned = viewModelFor(member(bob, "ban"));
+            assert.equal(banned.canKick, false);
+            assert.equal(banned.canBan, false);
+
+            // Own membership, and peers at the same level, offer neither action.
+            assert.equal(viewModelFor(member(alice, "join")).canKick, false);
+            assert.equal(viewModelFor(member(alice, "join")).canBan, false);
+            const peer = new PowerLevels({
+                powerLevelEvent: {content: {users: {[alice]: 50, [bob]: 50}}},
+                ownUserId: alice,
+                membership: "join",
+            });
+            const equalLevel = viewModelFor(member(bob, "join"));
+            equalLevel._powerLevelsObservable = {get: () => peer};
+            assert.equal(equalLevel.canKick, false);
+            assert.equal(equalLevel.canBan, false);
         },
         "creating an identity backs up the rotation key only after the custodian accepts": async assert => {
             const secrets = memorySecrets();
