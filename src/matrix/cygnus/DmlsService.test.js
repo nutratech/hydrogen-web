@@ -19,7 +19,7 @@ if (!globalThis.crypto) {
 const ROUTE_ROOM = "!dmls-route:example.org";
 const KEY_ROOM = "!dmls-key:example.org";
 const CAS_ROOM = "!dmls-cas:example.org";
-const ALICE = "@Cl5rPGgj2s7JHMwFxSEOHfFYM_K0PDpnhXEMYwMgQuo";
+const ALICE = "@dI_Nb8pazMUMAWyJ4zMFDtJnftNKYwQu2puGEkPBcKY";
 const BOB = "@AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const ALICE_SEED = "ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISE";
 const BOB_SEED = "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI";
