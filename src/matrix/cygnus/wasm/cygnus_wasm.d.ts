@@ -19,6 +19,227 @@ export function contentHash(event_json: string): string;
 export function createDeviceCertificate(sender: string, master_seed: string, self_signing_seed: string, device_id: string, device_seed: string): string;
 
 /**
+ * Apply a received Commit, merge, or external Commit.
+ *
+ * `ctxJson` is `{"senderMember":"<principal:device>","ancestors":[event_id...]}`
+ * (`roomId` may be present and is ignored). `registryJson` is required for
+ * `m.dmls.merge` and ignored otherwise.
+ *
+ * Returns `{status:"applied", groupId, commitId, epoch, members,
+ * extremityCount}`, `{status:"deferred", reason, extremityCount}`, or
+ * `{status:"rejected", reason}`.
+ *
+ * # Errors
+ * Throws for a malformed argument, an unknown group, or a missing registry.
+ */
+export function dmlsApplyCommit(group_id_json: string, event_type: string, content_json: string, ctx_json: string, registry_json?: string | null): string;
+
+/**
+ * Authorize a received `m.dmls.reboot` without changing local state.
+ *
+ * The sender must be an active member of the named base and every listed
+ * member must be in it. A member that lost the base defers with
+ * `missing_base_state`.
+ *
+ * Returns `{status:"accepted", newGroupId, members}` or `{status, reason}`.
+ *
+ * # Errors
+ * Throws for a malformed argument or an unknown group.
+ */
+export function dmlsCheckReboot(group_id_json: string, content_json: string, ctx_json: string): string;
+
+/**
+ * Produce one Commit from a single membership operation.
+ *
+ * `opsJson` is one object: `{"op":"add","keyPackage":"<b64>"}`,
+ * `{"op":"remove","member":"<principal:device>"}`, or
+ * `{"op":"self_update"}`. `baseJson` is the held base extremity
+ * (`{mls_epoch, commit_id, event_id}`); omit it only when the base is the
+ * genesis state.
+ *
+ * Returns `{eventType, content, groupId, commitId, epoch, members, welcome,
+ * recipients}`. A Welcome is `welcome` (base64url) plus `recipients`
+ * (`[{toDevice:{principal,deviceId}, keyPackageId}]`); finish the to-device
+ * content with `dmlsWelcomeContent` after the Commit event is published.
+ *
+ * # Errors
+ * Throws for a malformed argument, a bad base, or an MLS failure.
+ */
+export function dmlsCommit(group_id_json: string, device_seed_b64: string, ops_json: string, base_json?: string | null): string;
+
+/**
+ * Create the epoch-0 group for `roomId` and install it locally.
+ *
+ * Returns `{groupId, commitId, epoch, members, stateB64}`. Nothing is
+ * published; the first event is the epoch-1 Commit from `dmlsCommit`.
+ *
+ * # Errors
+ * Throws for a malformed identity or seed, an already loaded group, or an MLS
+ * failure.
+ */
+export function dmlsCreateGroup(identity_json: string, device_seed_b64: string, room_id: string): string;
+
+/**
+ * Decrypt one application message, trying every held state at its epoch.
+ *
+ * Returns `{status:"ok", innerType, innerContentJson, senderMember, epoch,
+ * commitId}`, `{status:"missing_state", epoch}`, or
+ * `{status:"rejected", reason}`.
+ *
+ * # Errors
+ * Throws for a malformed argument or an unknown group.
+ */
+export function dmlsDecrypt(group_id_json: string, content_json: string, room_id: string): string;
+
+/**
+ * Encrypt one application message at the named branch or the sole tip.
+ *
+ * The §13 plaintext `{room_id, type, content}` is built inside wasm. `roomId`
+ * is the room id; for a reboot group it does not hash to `groupId`.
+ *
+ * Returns `{eventType:"m.room.encrypted", content}`.
+ *
+ * # Errors
+ * Throws for a malformed argument, an unknown group, an unheld branch, a
+ * `fork_unresolved` ambiguous tip, or a seed that does not match the group.
+ */
+export function dmlsEncrypt(group_id_json: string, device_seed_b64: string, room_id: string, inner_type: string, inner_content_json: string, at_commit_id?: string | null): string;
+
+/**
+ * Serialize a loaded group to its versioned blob, base64url encoded.
+ *
+ * # Errors
+ * Throws for an unknown group.
+ */
+export function dmlsExportGroup(group_id_json: string): string;
+
+/**
+ * Join a group by external Commit against a target extremity.
+ *
+ * `targetJson` is the target extremity (`{mls_epoch, commit_id, event_id}`)
+ * and `sourceContentJson` is the content of the event that produced it. Wasm
+ * checks that the source content's `mls_epoch`/`commit_id` are the target's
+ * and takes `group_info` from it.
+ *
+ * Returns `{eventType, content, groupId, commitId, epoch, members}`.
+ *
+ * # Errors
+ * Throws for a malformed argument, a mismatched source, or an MLS failure.
+ */
+export function dmlsExternalCommit(identity_json: string, device_seed_b64: string, room_id: string, target_json: string, source_content_json: string): string;
+
+/**
+ * Drop a group from wasm memory. The persisted blob is untouched.
+ *
+ * # Errors
+ * Throws for a malformed group id.
+ */
+export function dmlsForget(group_id_json: string): void;
+
+/**
+ * Whether a group is loaded in this wasm instance.
+ *
+ * # Errors
+ * Throws for a malformed group id.
+ */
+export function dmlsHasGroup(group_id_json: string): boolean;
+
+/**
+ * Import a group blob, replacing a loaded entry atomically.
+ *
+ * Returns `{groupId, seq, extremities, extremityCount}`.
+ *
+ * # Errors
+ * Throws for a malformed blob, an unsupported version, or a stale `seq`.
+ */
+export function dmlsImportGroup(state_b64: string): string;
+
+/**
+ * Join a group from a received `m.dmls.welcome`.
+ *
+ * `welcomeContentJson` is the verified event content and `secretsB64` is the
+ * stored secret for its `key_package_id`. A missing secret is
+ * `{status:"wrong_key_package"}`. The group id comes from the content, so a
+ * reboot replacement group joins the same way as a room-derived one.
+ *
+ * Returns `{status:"applied", groupId, commitId, epoch, members}` or
+ * `{status, reason}`.
+ *
+ * # Errors
+ * Throws for a malformed identity or an already loaded group.
+ */
+export function dmlsJoinWelcome(identity_json: string, device_seed_b64: string, welcome_content_json: string, secrets_b64?: string | null): string;
+
+/**
+ * Build a single-use key package and the secrets that redeem its Welcome.
+ *
+ * Returns `{eventType, content, keyPackageId, secretsB64}`. Persist
+ * `secretsB64` keyed by `keyPackageId` before publishing `content`.
+ *
+ * # Errors
+ * Throws for a malformed identity or seed, or an MLS failure.
+ */
+export function dmlsKeyPackage(identity_json: string, device_seed_b64: string): string;
+
+/**
+ * Plan and build an `m.dmls.merge` Commit.
+ *
+ * Inputs are as `dmlsPlanMerge`. The Commit resolves every requested state and
+ * uses the plan's base. `keyPackagesJson` is an optional JSON array of
+ * base64url KeyPackages, exactly one per member the plan Adds; a plan that
+ * needs an Add without it is `rejected` with `missing_key_package`.
+ *
+ * Returns `{status:"merged", eventType, content, groupId, commitId, epoch,
+ * members, welcome, recipients}` or `{status, reason}`.
+ *
+ * # Errors
+ * Throws for a malformed argument or an MLS failure.
+ */
+export function dmlsMerge(group_id_json: string, device_seed_b64: string, requested_json: string, registry_json: string, key_packages_json?: string | null): string;
+
+/**
+ * Plan a merge over the held branches named by `requestedJson`.
+ *
+ * Each entry is `{"commit_id":"<b64url32>","event_id":"$..."}`; the epoch is
+ * read from the held state. `registryJson` is the per-call device-root
+ * registry (§5.1) and is never cached.
+ *
+ * Returns `{status:"planned", plan}` or `{status, reason}`.
+ *
+ * # Errors
+ * Throws for a malformed argument or corrupt stored metadata.
+ */
+export function dmlsPlanMerge(group_id_json: string, requested_json: string, registry_json: string): string;
+
+/**
+ * Start a replacement group after unrecoverable state loss (00FD §11).
+ *
+ * `keyPackagesJson` is a JSON array of base64url serialized KeyPackages, one
+ * per member carried over. `baseJson` is the held old-group extremity
+ * (`{mls_epoch, commit_id, event_id}`).
+ *
+ * Returns `{newGroupId, rebootContent, commitContent, commitId, welcome,
+ * recipients}`. The one Welcome is shared; build each recipient's to-device
+ * content with `dmlsWelcomeContent` once the new Commit's event id is known.
+ *
+ * # Errors
+ * Throws for a malformed argument, a non-member KeyPackage, or an MLS failure.
+ */
+export function dmlsReboot(group_id_json: string, device_seed_b64: string, reason: string, key_packages_json: string, base_json: string): string;
+
+/**
+ * Build the to-device `m.dmls.welcome` content once the Commit's event id is
+ * known.
+ *
+ * Returns `{eventType, content}` for each added recipient, using the shared
+ * Welcome bytes and that recipient's `keyPackageId`.
+ *
+ * # Errors
+ * Throws for a malformed id or an empty Welcome.
+ */
+export function dmlsWelcomeContent(group_id_json: string, commit_event_id: string, commit_id: string, key_package_id: string, welcome_b64: string): string;
+
+/**
  * Matrix v3 event ID (`$` plus reference hash) of an event.
  *
  * # Errors
@@ -131,6 +352,23 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly contentHash: (a: number, b: number) => [number, number, number, number];
     readonly createDeviceCertificate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly dmlsApplyCommit: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly dmlsCheckReboot: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly dmlsCommit: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly dmlsCreateGroup: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly dmlsDecrypt: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly dmlsEncrypt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+    readonly dmlsExportGroup: (a: number, b: number) => [number, number, number, number];
+    readonly dmlsExternalCommit: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly dmlsForget: (a: number, b: number) => [number, number];
+    readonly dmlsHasGroup: (a: number, b: number) => [number, number, number];
+    readonly dmlsImportGroup: (a: number, b: number) => [number, number, number, number];
+    readonly dmlsJoinWelcome: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly dmlsKeyPackage: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly dmlsMerge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly dmlsPlanMerge: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly dmlsReboot: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly dmlsWelcomeContent: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly eventId: (a: number, b: number) => [number, number, number, number];
     readonly parseLink: (a: number, b: number) => [number, number, number, number];
     readonly parsePrincipal: (a: number, b: number) => [number, number, number, number];
@@ -145,9 +383,10 @@ export interface InitOutput {
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __externref_table_dealloc: (a: number) => void;
-    readonly __externref_table_alloc: () => number;
     readonly __externref_drop_slice: (a: number, b: number) => void;
     readonly __wbindgen_start: () => void;
 }

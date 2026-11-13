@@ -8,6 +8,7 @@ import {CygnusCrypto} from "./CygnusCrypto.js";
 import {CygnusIdentity} from "./CygnusIdentity.js";
 import {CygnusEventSigner} from "./CygnusEventSigner.js";
 import {CygnusRooms} from "./CygnusRooms.js";
+import {DmlsService} from "./DmlsService.js";
 import {isCygnusRoomVersion} from "./constants.js";
 import {hasPublishedCrossSigningKeys, olmSigner, publishCrossSigningKeys} from "../verification/publishCrossSigningKeys.js";
 
@@ -104,6 +105,18 @@ export class CygnusService {
         this._isSupported = false;
         /** @type {ObservableValue<CygnusIdentity | undefined>} */
         this.identity = new ObservableValue(undefined);
+        // DMLS stays lazy: it touches wasm and IndexedDB only for a room whose
+        // create content selects it, and refuses an unknown version.
+        this._dmls = new DmlsService({
+            storage,
+            getIdentity: () => this.identity.get(),
+            subtleCrypto: this._subtleCrypto,
+            getRandomValues,
+            sendEvent: (roomId, type, content, txnId, log) => this.sendRoomEvent(roomId, type, content, txnId, log),
+            sendToDevice: async (type, payload, txnId, log) => {
+                await this._hsApi.sendToDevice(type, payload, txnId, {log}).response();
+            },
+        });
         this._loading = undefined;
         this._identityLock = Promise.resolve();
     }
@@ -118,6 +131,11 @@ export class CygnusService {
     /** True once `load` found the homeserver advertising MSC00FC. */
     get isSupported() {
         return this._isSupported;
+    }
+
+    /** DMLS group lifecycle, storage, and protocol routing for this device. */
+    get dmls() {
+        return this._dmls;
     }
 
     load(log) {

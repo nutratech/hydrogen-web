@@ -18,6 +18,7 @@ import {DecryptionSource} from "../e2ee/common";
 import {iterateResponseStateEvents} from "./common";
 import {PowerLevels, EVENT_TYPE as POWERLEVELS_EVENT_TYPE } from "./PowerLevels.js";
 import {isCygnusRoomVersion, isPrincipal} from "../cygnus/constants.js";
+import {DmlsService} from "../cygnus/DmlsService.js";
 
 const EVENT_ENCRYPTED_TYPE = "m.room.encrypted";
 
@@ -40,6 +41,8 @@ export class Room extends BaseRoom {
         });
         const {getCygnus} = options;
         this._getCygnus = getCygnus;
+        /** Last capability classification seen in the create event. */
+        this._dmlsCapability = undefined;
         this._syncOwnUserIds = null;
         this._sendQueue = new SendQueue({
             roomId: this.id, storage: this._storage, hsApi: this._hsApi, pendingEvents,
@@ -60,6 +63,11 @@ export class Room extends BaseRoom {
 
     get ownUserIds() {
         return this._syncOwnUserIds || super.ownUserIds;
+    }
+
+    /** How this room's create content classifies DMLS, once seen. */
+    get dmlsCapability() {
+        return this._dmlsCapability;
     }
 
     _resolveOwnUserIds(roomResponse) {
@@ -98,9 +106,18 @@ export class Room extends BaseRoom {
             log.set("newKeys", newKeys.length);
         }
         let summaryChanges = this._summary.data.applySyncResponse(roomResponse, membership, this.ownUserIds);
+        const capability = DmlsService.capabilityFromRoomResponse(roomResponse);
+        if (capability) {
+            this._dmlsCapability = capability;
+        }
+        // A create content with a DMLS block owns encryption for this room,
+        // including a version this client does not implement (never Megolm).
+        const dmlsSelected = !!this._dmlsCapability &&
+            this._dmlsCapability.reason !== "not_cygnus" &&
+            this._dmlsCapability.reason !== "absent";
         let roomEncryption = this._roomEncryption;
         // encryption is enabled in this sync
-        if (!roomEncryption && summaryChanges.encryption) {
+        if (!roomEncryption && summaryChanges.encryption && !dmlsSelected) {
             log.set("enableEncryption", true);
             roomEncryption = this._createRoomEncryption(this, summaryChanges.encryption);
         }
@@ -268,6 +285,14 @@ export class Room extends BaseRoom {
         this._setEncryption(roomEncryption);
         if (this._roomEncryption) {
             this._roomEncryption.afterSync(encryptionChanges);
+        }
+        const dmls = this._getCygnus?.()?.dmls;
+        if (dmls && roomResponse?.timeline?.events?.length) {
+            // Apply/merge/reboot/external-commit events are protocol traffic.
+            // Persist their state after the sync transaction commits; a failed
+            // event is retried by the next sync.
+            dmls.enqueueRoomEvents(this.id, roomResponse.timeline.events, log)
+                .catch(err => log.catch(err));
         }
         if (memberChanges.size) {
             if (this._changedMembersDuringSync) {

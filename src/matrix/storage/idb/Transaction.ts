@@ -31,6 +31,7 @@ import {OperationStore} from "./stores/OperationStore";
 import {AccountDataStore} from "./stores/AccountDataStore";
 import {CallStore} from "./stores/CallStore";
 import {SharedSecretStore} from "./stores/SharedSecretStore";
+import {DmlsGroupStore, DmlsKeyPackageStore} from "./stores/DmlsStore";
 import type {ILogger, ILogItem} from "../../../logging/types";
 
 export type IDBKey = IDBValidKey | IDBKeyRange;
@@ -173,6 +174,14 @@ export class Transaction {
 
     get sharedSecrets(): SharedSecretStore {
         return this._store(StoreNames.sharedSecrets, idbStore => new SharedSecretStore(idbStore));
+    }
+
+    get dmlsGroups(): DmlsGroupStore {
+        return this._store(StoreNames.dmlsGroups, idbStore => new DmlsGroupStore(idbStore));
+    }
+
+    get dmlsKeyPackages(): DmlsKeyPackageStore {
+        return this._store(StoreNames.dmlsKeyPackages, idbStore => new DmlsKeyPackageStore(idbStore));
     }
 
     async complete(log?: ILogItem): Promise<void> {

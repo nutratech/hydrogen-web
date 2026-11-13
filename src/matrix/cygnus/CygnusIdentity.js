@@ -116,6 +116,8 @@ export class CygnusIdentity {
     get custodian() { return this._record.custodian; }
     get masterKey() { return this._record.masterKey; }
     get deviceId() { return this._record.deviceId; }
+    /** This device's Cygnus signing seed; never leaves the browser. */
+    get deviceSeed() { return this._record.deviceSeed; }
     get deviceCertificate() { return this._record.deviceCertificate; }
     get rotationSeed() { return this._record.rotationSeed; }
     get revokedDeviceIds() { return this._record.revokedDeviceIds.slice(); }

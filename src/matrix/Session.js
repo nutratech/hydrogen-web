@@ -42,6 +42,7 @@ import {
 } from "./ssss/index";
 import {ObservableValue, RetainedObservableValue} from "../observable/value";
 import {CygnusService} from "./cygnus/CygnusService.js";
+import {DMLS_EVENT_TYPES} from "./cygnus/DmlsService.js";
 import {CallHandler} from "./calls/CallHandler";
 import {RoomStateHandlerSet} from "./room/state/RoomStateHandlerSet";
 
@@ -117,6 +118,14 @@ export class Session {
         }) : undefined;
         this._secretSharing = null;
         this._secretStorage = null;
+        if (this._cygnus) {
+            this._deviceMessageHandler.on("message", ({unencrypted}) => {
+                if (unencrypted?.type === DMLS_EVENT_TYPES.welcome) {
+                    this._platform.logger.run("dmls welcome", log =>
+                        this._cygnus.dmls.handleToDevice(unencrypted).catch(err => log.catch(err)));
+                }
+            });
+        }
     }
 
     get fingerprintKey() {
