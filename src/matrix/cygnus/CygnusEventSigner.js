@@ -26,9 +26,9 @@ function same(a, b) {
 }
 
 /**
- * Sends in progress, keyed by transaction ID and shared across instances, so
- * overlapping calls for the same transaction await one draft and one signed
- * event instead of signing two.
+ * Sends in progress, keyed by principal, device and transaction ID, so
+ * overlapping calls for the same identity and transaction await one draft
+ * and one signed event instead of signing two.
  * @type {Map<string, Promise<{eventId: string, event: object}>>}
  */
 const inFlightSends = new Map();
@@ -154,16 +154,17 @@ export class CygnusEventSigner {
      * @returns {Promise<{eventId: string, event: object}>} the submitted event and its ID
      */
     async send(request, {log, txnId = this._createTxnId()} = {}) {
-        const ongoing = inFlightSends.get(txnId);
+        const sendKey = JSON.stringify([this._identity.principal, this._identity.deviceId, txnId]);
+        const ongoing = inFlightSends.get(sendKey);
         if (ongoing) {
             return ongoing;
         }
         const run = this._send(request, {log, txnId}).finally(() => {
-            if (inFlightSends.get(txnId) === run) {
-                inFlightSends.delete(txnId);
+            if (inFlightSends.get(sendKey) === run) {
+                inFlightSends.delete(sendKey);
             }
         });
-        inFlightSends.set(txnId, run);
+        inFlightSends.set(sendKey, run);
         return run;
     }
 

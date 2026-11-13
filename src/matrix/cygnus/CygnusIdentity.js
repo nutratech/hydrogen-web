@@ -259,7 +259,7 @@ export class CygnusIdentity {
             throw new Error("finish the pending Cygnus move before rotating keys");
         }
         if (!this._record.pendingRotation) {
-            await this._assertRotationKey(this._record.rotationSeed);
+            await this._assertRotationKey(this._record.rotationSeed, log);
             const nextRotationSeed = this._crypto.generateSeed();
             const link = this._crypto.userSuccessor(
                 this._record.links[this._record.links.length - 1],
@@ -273,7 +273,7 @@ export class CygnusIdentity {
             await this._persist();
         }
         const {link, nextRotationSeed} = this._record.pendingRotation;
-        await this._ensureNextRotationKey(this._record.rotationSeed, nextRotationSeed);
+        await this._ensureNextRotationKey(this._record.rotationSeed, nextRotationSeed, log);
         // §9 defines import for both same-custodian advancement and moves.
         await this._hsApi.cygnusImportPrincipal([link], this._record.revokedDeviceIds, {log}).response();
         const links = [...this._record.links, link];
@@ -286,11 +286,11 @@ export class CygnusIdentity {
         await this._persist();
     }
 
-    async prepareMove({custodian, displayUserId, roomIds}) {
-        return this._withOperation(() => this._prepareMove({custodian, displayUserId, roomIds}));
+    async prepareMove({custodian, displayUserId, roomIds, log}) {
+        return this._withOperation(() => this._prepareMove({custodian, displayUserId, roomIds, log}));
     }
 
-    async _prepareMove({custodian, displayUserId, roomIds}) {
+    async _prepareMove({custodian, displayUserId, roomIds, log}) {
         if (this._record.pendingMove) {
             let pending = this._record.pendingMove;
             if (pending.custodian !== custodian || pending.displayUserId !== displayUserId) {
@@ -301,13 +301,13 @@ export class CygnusIdentity {
                 this._record = {...this._record, pendingMove: pending};
                 await this._persist();
             }
-            await this._ensureNextRotationKey(this._record.rotationSeed, pending.nextRotationSeed);
+            await this._ensureNextRotationKey(this._record.rotationSeed, pending.nextRotationSeed, log);
             return pending;
         }
         if (this._record.pendingRotation) {
             throw new Error("finish the pending Cygnus rotation before moving homeservers");
         }
-        await this._assertRotationKey(this._record.rotationSeed);
+        await this._assertRotationKey(this._record.rotationSeed, log);
         const nextRotationSeed = this._crypto.generateSeed();
         const link = this._crypto.userSuccessor(
             this._record.links[this._record.links.length - 1],
@@ -327,7 +327,7 @@ export class CygnusIdentity {
         };
         this._record = {...this._record, pendingMove};
         await this._persist();
-        await this._ensureNextRotationKey(this._record.rotationSeed, nextRotationSeed);
+        await this._ensureNextRotationKey(this._record.rotationSeed, nextRotationSeed, log);
         return pendingMove;
     }
 
@@ -403,7 +403,7 @@ export class CygnusIdentity {
         }
     }
 
-    async _ensureNextRotationKey(currentSeed, nextSeed) {
+    async _ensureNextRotationKey(currentSeed, nextSeed, log) {
         if (!this._secretFetcher) return;
         const stored = await this._secretFetcher.readSecretStorage(ROTATION_KEY_SECRET);
         const storedSeed = stored ? toBase64Url(stored) : undefined;
@@ -411,7 +411,7 @@ export class CygnusIdentity {
         if (storedSeed !== currentSeed) {
             throw new Error("secret-storage rotation key differs from this device's current key; refusing to submit the signed link");
         }
-        await this._secretFetcher.writeSecret(ROTATION_KEY_SECRET, toBase64Standard(nextSeed));
+        await this._secretFetcher.writeSecret(ROTATION_KEY_SECRET, toBase64Standard(nextSeed), log);
     }
 
     async _persist() {

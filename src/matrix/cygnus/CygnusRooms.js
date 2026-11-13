@@ -51,7 +51,10 @@ export class CygnusRooms {
      * resume an earlier `createRoom` that failed partway. The transaction IDs
      * are derived from the room ID, so a retry resends the same signed events.
      */
-    async finishRoom(roomId, {name, topic, isPublic = false, log} = {}) {
+    async finishRoom(roomId, {name, topic, isPublic, log} = {}) {
+        if (typeof isPublic !== "boolean") {
+            throw new TypeError("isPublic must be supplied when finishing a room");
+        }
         await this._finishRoom(roomId, {name, topic, isPublic}, log);
         return roomId;
     }

@@ -14,7 +14,15 @@ function memoryBacking(initial = {}) {
 }
 
 function installBacking(backing) {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
     globalThis.localStorage = backing;
+    return () => {
+        if (previous) {
+            Object.defineProperty(globalThis, "localStorage", previous);
+        } else {
+            delete globalThis.localStorage;
+        }
+    };
 }
 
 function session(id, extra = {}) {
@@ -34,36 +42,48 @@ function session(id, extra = {}) {
 export function tests() {
     return {
         "concurrent add calls keep both sessions": async assert => {
-            installBacking(memoryBacking());
-            const storage = new SessionInfoStorage("sessions");
-            await Promise.all([storage.add(session("a")), storage.add(session("b"))]);
-            const ids = (await storage.getAll()).map(s => s.id).sort();
-            assert.deepEqual(ids, ["a", "b"]);
+            const restore = installBacking(memoryBacking());
+            try {
+                const storage = new SessionInfoStorage("sessions");
+                await Promise.all([storage.add(session("a")), storage.add(session("b"))]);
+                const ids = (await storage.getAll()).map(s => s.id).sort();
+                assert.deepEqual(ids, ["a", "b"]);
+            } finally {
+                restore();
+            }
         },
         "concurrent update and updateLastUsed do not lose either change": async assert => {
-            installBacking(memoryBacking());
-            const storage = new SessionInfoStorage("sessions");
-            await storage.add(session("a"));
-            await Promise.all([
-                storage.update("a", {accessToken: "new"}),
-                storage.updateLastUsed("a", 42),
-            ]);
-            const stored = await storage.get("a");
-            assert.equal(stored.accessToken, "new");
-            assert.equal(stored.lastUsed, 42);
+            const restore = installBacking(memoryBacking());
+            try {
+                const storage = new SessionInfoStorage("sessions");
+                await storage.add(session("a"));
+                await Promise.all([
+                    storage.update("a", {accessToken: "new"}),
+                    storage.updateLastUsed("a", 42),
+                ]);
+                const stored = await storage.get("a");
+                assert.equal(stored.accessToken, "new");
+                assert.equal(stored.lastUsed, 42);
+            } finally {
+                restore();
+            }
         },
         "concurrent updateAccessToken and delete keep the storage consistent": async assert => {
-            installBacking(memoryBacking());
-            const storage = new SessionInfoStorage("sessions");
-            await storage.add(session("a"));
-            await storage.add(session("b"));
-            await Promise.all([
-                storage.updateAccessToken("a", "new"),
-                storage.delete("b"),
-            ]);
-            const sessions = await storage.getAll();
-            assert.deepEqual(sessions.map(s => s.id), ["a"]);
-            assert.equal(sessions[0].accessToken, "new");
+            const restore = installBacking(memoryBacking());
+            try {
+                const storage = new SessionInfoStorage("sessions");
+                await storage.add(session("a"));
+                await storage.add(session("b"));
+                await Promise.all([
+                    storage.updateAccessToken("a", "new"),
+                    storage.delete("b"),
+                ]);
+                const sessions = await storage.getAll();
+                assert.deepEqual(sessions.map(s => s.id), ["a"]);
+                assert.equal(sessions[0].accessToken, "new");
+            } finally {
+                restore();
+            }
         },
     };
 }

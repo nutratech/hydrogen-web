@@ -585,6 +585,29 @@ export function tests() {
             // "kick" is not a membership: it is a leave event sent by someone else
             assert.deepEqual(sent[1].content, {membership: "leave", reason: "spam"});
         },
+        "a state-event retry resends the same signed event": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity();
+            const {api, drafts} = assistedApi(crypto, identity);
+            const sendSigned = api.cygnusSendSigned;
+            let fail = true;
+            api.cygnusSendSigned = (...args) => {
+                if (fail) {
+                    fail = false;
+                    return request(new Error("offline"));
+                }
+                return sendSigned(...args);
+            };
+            const service = new CygnusService({
+                storage, hsApi: api, userId: "@alice:chat.example.org", deviceId: "HYDROGEN",
+            });
+            service._crypto = crypto;
+            service._isSupported = true;
+            service.identity.set(identity);
+            await assert.rejects(service.sendStateEvent(ROOM_ID, "m.room.topic", {topic: "Lobby"}), /offline/);
+            await service.sendStateEvent(ROOM_ID, "m.room.topic", {topic: "Lobby"});
+            // the retry reused the stored signed event rather than drafting a second one
+            assert.equal(drafts.length, 1);
+        },
         "Room normalises kick to leave and returns event IDs on both paths": async assert => {
             const makeRoom = (roomVersion, cygnus) => {
                 const room = Object.create(Room.prototype);

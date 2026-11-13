@@ -306,7 +306,7 @@ export class CygnusService {
         await identity.beginMoveHandoff();
         let pendingMove;
         try {
-            pendingMove = await identity.prepareMove({custodian, displayUserId, roomIds: allRooms});
+            pendingMove = await identity.prepareMove({custodian, displayUserId, roomIds: allRooms, log});
         } catch (err) {
             // no signed move link exists yet: let this device sign again, unless it just
             // revoked itself, which the next rotation would publish; a retry resumes instead
@@ -624,19 +624,33 @@ export class CygnusService {
      * Cygnus room. Cygnus rooms cannot use the plain `/state` endpoint: every
      * user-authored event must also carry a device signature (§5.2.1).
      */
-    async sendStateEvent(roomId, type, content, stateKey = "", log) {
+    async sendStateEvent(roomId, type, content, stateKey = "", log, txnId) {
         const identity = this._requireIdentity();
-        const {eventId} = await this._signer(identity).send({roomId, type, stateKey, content}, {log});
+        // A retry must resend the same signed event. Derive a stable ID from
+        // the request when the caller (or a pending event) has not supplied
+        // one, so a lost response cannot make the retry sign a second event.
+        if (!txnId) {
+            const {contentHash} = this._crypto.contentHash({
+                principal: identity.principal,
+                deviceId: identity.deviceId,
+                roomId,
+                type,
+                stateKey,
+                content,
+            });
+            txnId = `cygnus-state-${contentHash}`;
+        }
+        const {eventId} = await this._signer(identity).send({roomId, type, stateKey, content}, {log, txnId});
         return eventId;
     }
 
     /** Send a device-signed membership event for another principal (invite, leave or ban). */
-    async sendMembershipEvent(roomId, principal, membership, reason, log) {
+    async sendMembershipEvent(roomId, principal, membership, reason, log, txnId) {
         const content = {membership};
         if (reason) {
             content.reason = reason;
         }
-        return this.sendStateEvent(roomId, "m.room.member", content, principal, log);
+        return this.sendStateEvent(roomId, "m.room.member", content, principal, log, txnId);
     }
 
     /** Resolve a Matrix user ID to its principal, for invites, kicks and bans (§9). */

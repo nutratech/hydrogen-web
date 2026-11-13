@@ -37,7 +37,7 @@ export class Room extends BaseRoom {
             roomId: this.id,
             fragmentIdComparer: this._fragmentIdComparer,
             relationWriter,
-            memberWriter: new MemberWriter(this.id)
+            memberWriter: new MemberWriter(this.id, () => this.isCygnus)
         });
         const {getCygnus} = options;
         this._getCygnus = getCygnus;
@@ -565,37 +565,37 @@ export class Room extends BaseRoom {
      * Send a state event in this room. Cygnus rooms route it through the
      * device-signed `send_signed` path instead of the plain `/state` endpoint.
      */
-    sendStateEvent(type, stateKey, content, log = null) {
+    sendStateEvent(type, stateKey, content, log = null, txnId) {
         return this._platform.logger.wrapOrRun(log, "sendState", async log => {
             log.set("id", this.id);
             log.set("type", type);
             if (this.isCygnus) {
                 const cygnus = this._getCygnus?.();
                 if (!cygnus) throw new Error("Cygnus is unavailable for this room");
-                return cygnus.sendStateEvent(this.id, type, content, stateKey, log);
+                return cygnus.sendStateEvent(this.id, type, content, stateKey, log, txnId);
             }
             const response = await this._hsApi.sendState(this.id, type, stateKey, content, {log}).response();
             return response.event_id;
         });
     }
 
-    setName(name, log = null) {
-        return this.sendStateEvent("m.room.name", "", {name}, log);
+    setName(name, log = null, txnId) {
+        return this.sendStateEvent("m.room.name", "", {name}, log, txnId);
     }
 
-    setTopic(topic, log = null) {
-        return this.sendStateEvent("m.room.topic", "", {topic}, log);
+    setTopic(topic, log = null, txnId) {
+        return this.sendStateEvent("m.room.topic", "", {topic}, log, txnId);
     }
 
-    setJoinRule(joinRule, log = null) {
-        return this.sendStateEvent("m.room.join_rules", "", {join_rule: joinRule}, log);
+    setJoinRule(joinRule, log = null, txnId) {
+        return this.sendStateEvent("m.room.join_rules", "", {join_rule: joinRule}, log, txnId);
     }
 
-    setPowerLevels(content, log = null) {
-        return this.sendStateEvent("m.room.power_levels", "", content, log);
+    setPowerLevels(content, log = null, txnId) {
+        return this.sendStateEvent("m.room.power_levels", "", content, log, txnId);
     }
 
-    async inviteUser(userId, reason, log = null) {
+    async inviteUser(userId, reason, log = null, txnId) {
         if (!userId) {
             throw new Error("userId is null/undefined");
         }
@@ -603,20 +603,20 @@ export class Room extends BaseRoom {
             const cygnus = this._getCygnus?.();
             if (!cygnus) throw new Error("Cygnus is unavailable for this room");
             const principal = isPrincipal(userId) ? userId : await cygnus.lookupPrincipal(userId, log);
-            return cygnus.sendMembershipEvent(this.id, principal, "invite", reason, log);
+            return cygnus.sendMembershipEvent(this.id, principal, "invite", reason, log, txnId);
         }
-        await this._hsApi.invite(this.id, userId, reason).response();
+        await this._hsApi.invite(this.id, userId, reason, {log}).response();
     }
 
-    async kickUser(userId, reason, log = null) {
-        return this._changeOtherMembership("kick", userId, reason, log);
+    async kickUser(userId, reason, log = null, txnId) {
+        return this._changeOtherMembership("kick", userId, reason, log, txnId);
     }
 
-    async banUser(userId, reason, log = null) {
-        return this._changeOtherMembership("ban", userId, reason, log);
+    async banUser(userId, reason, log = null, txnId) {
+        return this._changeOtherMembership("ban", userId, reason, log, txnId);
     }
 
-    async _changeOtherMembership(membership, userId, reason, log) {
+    async _changeOtherMembership(membership, userId, reason, log, txnId) {
         if (!userId) {
             throw new Error("userId is null/undefined");
         }
@@ -627,7 +627,7 @@ export class Room extends BaseRoom {
             const cygnus = this._getCygnus?.();
             if (!cygnus) throw new Error("Cygnus is unavailable for this room");
             const principal = isPrincipal(userId) ? userId : await cygnus.lookupPrincipal(userId, log);
-            return cygnus.sendMembershipEvent(this.id, principal, eventMembership, reason, log);
+            return cygnus.sendMembershipEvent(this.id, principal, eventMembership, reason, log, txnId);
         }
         const content = {membership: eventMembership};
         if (reason) {

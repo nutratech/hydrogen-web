@@ -78,7 +78,7 @@ export class CreateRoomView extends TemplateView {
                             type: "text", name: "roomAlias", id: "roomAlias",
                             placeholder: vm.i18n`Room alias (<alias>, or #<alias> or #<alias>:hs.tld`}),
                     ]),
-                    t.div({className: "form-group"}, [
+                    t.div({className: {"form-group": true, hidden: vm => vm.isCygnus}}, [
                         t.div(t.button({className: "link", type: "button", onClick: () => vm.toggleAdvancedShown()},
                             vm => vm.isAdvancedShown ? vm.i18n`Hide advanced settings` : vm.i18n`Show advanced settings`)),
                         t.div({className: {"form-row check": true, hidden: vm => !vm.isAdvancedShown || vm.isCygnus}}, [

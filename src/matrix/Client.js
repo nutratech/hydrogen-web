@@ -326,6 +326,12 @@ export class Client {
             .response();
         if (this._isDisposed) {
             // disposed while waiting: do not register auth or build a session
+            // No Session owns these resources yet, and callers waiting for a
+            // terminal load status (such as WorkspaceConnections) must settle.
+            olmWorker?.dispose();
+            dehydratedDevice?.dispose();
+            this._error = new Error("client disposed while loading");
+            this._status.set(LoadStatus.Error);
             return;
         }
         const mediaRepository = new MediaRepository({
