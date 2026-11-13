@@ -675,6 +675,62 @@ export function tests() {
             assert.equal(equalLevel.canKick, false);
             assert.equal(equalLevel.canBan, false);
         },
+        "kick and ban need a confirmation; cancel sends nothing and failures stay visible": async assert => {
+            const alice = "@alice:hs.tld";
+            const bob = "@bob:hs.tld";
+            const powerLevels = new PowerLevels({
+                powerLevelEvent: {content: {users: {[alice]: 50, [bob]: 25}}},
+                ownUserId: alice,
+                membership: "join",
+            });
+            const calls = [];
+            let failNext = false;
+            const room = {
+                ownUserIds: [alice],
+                kickUser: async (userId, reason) => {
+                    calls.push(["kick", userId, reason]);
+                    if (failNext) { failNext = false; throw new Error("refusing to sign"); }
+                },
+                banUser: async (userId, reason) => { calls.push(["ban", userId, reason]); },
+            };
+            const vm = Object.create(MemberDetailsViewModel.prototype);
+            vm._member = {userId: bob, membership: "join"};
+            vm._powerLevelsObservable = {get: () => powerLevels};
+            vm._room = room;
+            vm._options = {platform: {logger: {run: (_, fn) => fn({})}}, emitChange: () => {}};
+
+            // starting an action sends nothing; cancelling leaves nothing sent
+            vm.beginKick();
+            assert.equal(vm.pendingAction, "kick");
+            assert.equal(calls.length, 0);
+            vm.cancelAction();
+            assert.equal(vm.pendingAction, undefined);
+            await vm.confirmAction("ignored");
+            assert.equal(calls.length, 0);
+
+            // a failure keeps the confirmation open with the error, and can be retried
+            failNext = true;
+            vm.beginKick();
+            await vm.confirmAction("  spam  ");
+            assert.equal(vm.pendingAction, "kick");
+            assert.equal(vm.actionError, "refusing to sign");
+            assert.equal(vm.actionBusy, false);
+            await vm.confirmAction("spam");
+            assert.equal(vm.pendingAction, undefined);
+            assert.equal(vm.actionError, undefined);
+            assert.deepEqual(calls, [["kick", bob, "spam"], ["kick", bob, "spam"]]);
+
+            // an empty reason is omitted; ban goes through the same flow
+            vm.beginBan();
+            await vm.confirmAction("   ");
+            assert.deepEqual(calls[2], ["ban", bob, undefined]);
+
+            // actions that are not allowed cannot be started
+            vm._member = {userId: bob, membership: "ban"};
+            vm.beginKick();
+            vm.beginBan();
+            assert.equal(vm.pendingAction, undefined);
+        },
         "creating an identity backs up the rotation key only after the custodian accepts": async assert => {
             const secrets = memorySecrets();
             const {calls} = await aliceIdentity([], {secretFetcher: secrets});

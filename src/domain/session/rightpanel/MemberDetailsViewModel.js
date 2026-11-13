@@ -159,22 +159,66 @@ export class MemberDetailsViewModel extends ViewModel {
         return !!this._room && !this._room.ownUserIds.includes(this._member.userId);
     }
 
-    async kickUser(reason) {
-        if (!this.canKick) {
+    /** "kick" or "ban" while the user is being asked to confirm it, else undefined. */
+    get pendingAction() { return this._pendingAction; }
+
+    get actionBusy() { return !!this._actionBusy; }
+
+    /** Why the last confirmed action failed; the confirmation stays open so it can be retried. */
+    get actionError() { return this._actionError; }
+
+    beginKick() { this._beginAction("kick", this.canKick); }
+
+    beginBan() { this._beginAction("ban", this.canBan); }
+
+    _beginAction(action, allowed) {
+        if (!allowed || this._actionBusy) {
             return;
         }
-        await this.logAndCatch("MemberDetailsViewModel.kickUser", async log => {
-            await this._room.kickUser(this.userId, reason, log);
-        });
+        this._pendingAction = action;
+        this._actionError = undefined;
+        this.emitChange("pendingAction");
     }
 
-    async banUser(reason) {
-        if (!this.canBan) {
+    cancelAction() {
+        if (this._actionBusy || !this._pendingAction) {
             return;
         }
-        await this.logAndCatch("MemberDetailsViewModel.banUser", async log => {
-            await this._room.banUser(this.userId, reason, log);
-        });
+        this._pendingAction = undefined;
+        this._actionError = undefined;
+        this.emitChange("pendingAction");
+    }
+
+    async confirmAction(reason) {
+        const action = this._pendingAction;
+        if (!action || this._actionBusy) {
+            return;
+        }
+        // power levels or membership may have changed while the confirmation was open
+        if (!(action === "kick" ? this.canKick : this.canBan)) {
+            this._pendingAction = undefined;
+            this.emitChange("pendingAction");
+            return;
+        }
+        this._actionBusy = true;
+        this._actionError = undefined;
+        this.emitChange("pendingAction");
+        try {
+            const trimmed = reason?.trim() || undefined;
+            await this.logger.run(`MemberDetailsViewModel.${action}User`, async log => {
+                if (action === "kick") {
+                    await this._room.kickUser(this.userId, trimmed, log);
+                } else {
+                    await this._room.banUser(this.userId, trimmed, log);
+                }
+            });
+            this._pendingAction = undefined;
+        } catch (err) {
+            this._actionError = err?.message || String(err);
+        } finally {
+            this._actionBusy = false;
+            this.emitChange("pendingAction");
+        }
     }
 
     get powerLevel() {

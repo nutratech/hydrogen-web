@@ -42,31 +42,45 @@ export class MemberDetailsView extends TemplateView {
             ]);
     }
 
+    _createConfirmation(t, vm) {
+        const reason = t.input({
+            type: "text",
+            className: "MemberDetailsView_reason",
+            placeholder: vm.i18n`Reason (optional)`,
+            disabled: vm => vm.actionBusy,
+        });
+        return t.form({
+            className: "MemberDetailsView_confirm",
+            onSubmit: evt => {
+                evt.preventDefault();
+                vm.confirmAction(reason.value);
+            },
+        }, [
+            t.p(vm => vm.pendingAction === "ban" ?
+                vm.i18n`Ban ${vm.name} from this room?` :
+                vm.i18n`Kick ${vm.name} from this room?`),
+            reason,
+            t.if(vm => vm.actionError, t => t.p({className: "MemberDetailsView_error", role: "alert"}, vm => vm.actionError)),
+            t.div({className: "MemberDetailsView_confirmButtons"}, [
+                t.button({type: "submit", className: "text", disabled: vm => vm.actionBusy},
+                    vm => vm.actionError ? vm.i18n`Retry` : vm.i18n`Confirm`),
+                t.button({type: "button", className: "text", disabled: vm => vm.actionBusy,
+                    onClick: () => vm.cancelAction()}, vm.i18n`Cancel`),
+            ]),
+        ]);
+    }
+
     _createOptions(t, vm) {
         const options = [
             t.a({href: vm.linkToUser, target: "_blank", rel: "noopener"}, vm.i18n`Open Link to User`),
             t.button({className: "text", onClick: () => vm.openDirectMessage()}, vm.i18n`Open direct message`),
-            t.if(vm => vm.canKick, t => t.button({
-                className: "text",
-                onClick: () => {
-                    const reason = prompt(vm.i18n`Reason for kicking ${vm.name} (optional):`);
-                    if (reason !== null) {
-                        vm.kickUser(reason);
-                    }
-                },
+            t.if(vm => vm.canKick && !vm.pendingAction, t => t.button({
+                className: "text", onClick: () => vm.beginKick(),
             }, vm.i18n`Kick`)),
-            t.if(vm => vm.canBan, t => t.button({
-                className: "text",
-                onClick: () => {
-                    if (!confirm(vm.i18n`Ban ${vm.name} from this room?`)) {
-                        return;
-                    }
-                    const reason = prompt(vm.i18n`Reason for banning ${vm.name} (optional):`);
-                    if (reason !== null) {
-                        vm.banUser(reason);
-                    }
-                },
+            t.if(vm => vm.canBan && !vm.pendingAction, t => t.button({
+                className: "text", onClick: () => vm.beginBan(),
             }, vm.i18n`Ban`)),
+            t.if(vm => !!vm.pendingAction, t => this._createConfirmation(t, vm)),
         ];
         if (vm.features.crossSigning) {
             if (vm.canVerifyUser) {
