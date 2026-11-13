@@ -11,6 +11,20 @@ import {LRUCache} from "../../../../utils/LRUCache";
 
 const USER_EPOCH_EVENT_TYPE = "m.room.user_epoch";
 
+/**
+ * Whether `event.sender` may speak for the principal it names (MSC00FC §5.3
+ * rule 2, the part checkable without the homeserver): the principal itself, or
+ * the custodian named in the event's own tip. This is not chain verification;
+ * a `display_user_id` still rests on the homeserver having checked `links`.
+ */
+export function isTrustedEpochSender(event) {
+    const sender = event?.sender;
+    if (typeof sender !== "string" || !sender) {
+        return false;
+    }
+    return sender === event.state_key || sender === event.content?.custodian;
+}
+
 function copyMemberWithDisplayName(member, displayName, epochHeight) {
     return new RoomMember({
         roomId: member.roomId,
@@ -112,6 +126,11 @@ export class MemberSync {
             const displayName = event?.content?.display_user_id;
             if (event?.type !== USER_EPOCH_EVENT_TYPE ||
                 typeof principal !== "string" || typeof displayName !== "string" || !displayName) {
+                continue;
+            }
+            if (!isTrustedEpochSender(event)) {
+                // a third party's claim about who someone is; never apply it
+                console.warn(`ignoring ${USER_EPOCH_EVENT_TYPE} for ${principal} sent by ${event.sender}`);
                 continue;
             }
             const height = Number(event.content?.height);
@@ -554,6 +573,41 @@ export function tests() {
             assert.equal(txn.members.get(alice).displayName, "@alice:hs.tld");
             assert.equal(txn.members.get(alice).cygnusEpochHeight, 2);
         },
+        "an epoch sent by a third party for someone else is ignored": async assert => {
+            const writer = new MemberWriter(roomId);
+            const txn = createStorage([]);
+            const mallory = "@MMMMPGgj2s7JHMwFxSEOHfFYM_K0PDpnhXEMYwMgQuo";
+            const memberSync = writer.prepareMemberSync([
+                createMemberEvent("join", alice),
+                createEpochEvent(alice, "@ceo:bank.tld", 1, mallory),
+            ], [], false);
+            await memberSync.write(txn);
+            assert.notEqual(txn.members.get(alice).displayName, "@ceo:bank.tld");
+            assert.equal(txn.members.get(alice).cygnusDisplayName, undefined);
+        },
+        "an epoch relayed by the custodian named in its tip is applied": async assert => {
+            const writer = new MemberWriter(roomId);
+            const txn = createStorage([]);
+            const custodian = "~C5H4UbcebozcY45_S9uOF3u5JQ4mzE22Q3o7FXUwino";
+            const memberSync = writer.prepareMemberSync([
+                createMemberEvent("join", alice),
+                createEpochEvent(alice, "@alice:hs.tld", 1, custodian, {custodian}),
+            ], [], false);
+            await memberSync.write(txn);
+            assert.equal(txn.members.get(alice).displayName, "@alice:hs.tld");
+        },
+        "a third party cannot apply an epoch by naming a different custodian": async assert => {
+            const writer = new MemberWriter(roomId);
+            const txn = createStorage([]);
+            const mallory = "@MMMMPGgj2s7JHMwFxSEOHfFYM_K0PDpnhXEMYwMgQuo";
+            const custodian = "~C5H4UbcebozcY45_S9uOF3u5JQ4mzE22Q3o7FXUwino";
+            const memberSync = writer.prepareMemberSync([
+                createMemberEvent("join", alice),
+                createEpochEvent(alice, "@ceo:bank.tld", 1, mallory, {custodian}),
+            ], [], false);
+            await memberSync.write(txn);
+            assert.equal(txn.members.get(alice).cygnusDisplayName, undefined);
+        },
         "a replayed older epoch does not replace a stored newer one": async assert => {
             const writer = new MemberWriter(roomId);
             const stored = new RoomMember({
@@ -574,12 +628,12 @@ export function tests() {
     };
 }
 
-function createEpochEvent(principal, displayUserId, height) {
+function createEpochEvent(principal, displayUserId, height, sender = principal, extra = {}) {
     return {
         type: "m.room.user_epoch",
         state_key: principal,
-        sender: principal,
-        content: {display_user_id: displayUserId, height},
+        sender,
+        content: {display_user_id: displayUserId, height, ...extra},
         event_id: `$epoch${height}`,
     };
 }

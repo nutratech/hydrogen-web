@@ -99,6 +99,6 @@
 }
 
 .MemberDetailsView_error {
-    color: var(--error-color, red);
+    color: var(--error-color);
     margin: 0;
 }
