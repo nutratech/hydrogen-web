@@ -756,6 +756,21 @@ export function tests() {
             }));
             assert.equal(failing.secrets.get(ROTATION_KEY_SECRET), "other device's key");
         },
+        "retrying create resumes the missing rotation-key backup without minting a principal": async assert => {
+            const {identity, storage} = await aliceIdentity();
+            const secrets = memorySecrets();
+            const service = new CygnusService({
+                storage, hsApi: {}, userId: "@alice:chat.example.org", deviceId: "HYDROGEN",
+                secretFetcher: secrets,
+            });
+            service._isSupported = true;
+            service.identity.set(identity);
+            identity.setSecretFetcher(secrets);
+            service.load = async () => {};
+            const resumed = await service.createIdentity();
+            assert.equal(resumed.principal, identity.principal);
+            assert.equal(secrets.secrets.get(ROTATION_KEY_SECRET), toStandard(USR_ROT_1));
+        },
         "rotation stores the next key in secret storage before submitting the link": async assert => {
             const secrets = memorySecrets();
             const {identity} = await aliceIdentity([SELF_SIGNING, USR_ROT_2], {secretFetcher: secrets});
@@ -797,6 +812,20 @@ export function tests() {
             await service.revokeDevice("LAPTOP");
             assert.deepEqual(calls.imports[0].revoked, ["LAPTOP"]);
             assert.equal(identity.height, 1);
+        },
+        "overlapping sends with one transaction ID sign and submit once": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity();
+            const {api, sent, drafts} = assistedApi(crypto, identity);
+            const request = {roomId: ROOM_ID, type: "m.room.topic", stateKey: "", content: {topic: "Lobby"}};
+            const first = new CygnusEventSigner({identity, crypto, hsApi: api, storage, createTxnId: () => "same"});
+            const second = new CygnusEventSigner({identity, crypto, hsApi: api, storage, createTxnId: () => "same"});
+            const [a, b] = await Promise.all([
+                first.send(request, {txnId: "same"}),
+                second.send(request, {txnId: "same"}),
+            ]);
+            assert.equal(drafts.length, 1);
+            assert.equal(sent.length, 1);
+            assert.equal(a.eventId, b.eventId);
         },
         "refuses a draft citing an older epoch than the one observed": async assert => {
             const {identity, crypto, storage} = await aliceIdentity();
@@ -923,6 +952,37 @@ export function tests() {
             assert.equal(sent[1].state_key, identity.principal);
             assert.deepEqual(sent[1].content, {membership: "join", custodian: SERVER_A});
             assert.equal(sent[1].room_id, roomId);
+        },
+        "a failed room setup exposes the room so it can be finished without another room": async assert => {
+            const sent = [];
+            let failJoinRules = true;
+            const signer = {
+                send: async req => {
+                    sent.push(req);
+                    if (req.type === "m.room.join_rules" && failJoinRules) {
+                        failJoinRules = false;
+                        throw new Error("setup failed");
+                    }
+                    return {eventId: `$${sent.length}`, event: {}};
+                },
+            };
+            const rooms = new CygnusRooms({identity: {links: ["L"]}, signer});
+            let error;
+            try {
+                await rooms.createRoom({name: "Lobby"});
+            } catch (err) {
+                error = err;
+            }
+            assert.ok(error);
+            assert.equal(error.roomId, "!1");
+            assert.deepEqual(error.roomSetup, {name: "Lobby", topic: undefined, isPublic: false});
+            const before = sent.map(e => e.type);
+            assert.deepEqual(before, ["m.room.create", "m.room.member", "m.room.join_rules"]);
+
+            await rooms.finishRoom(error.roomId, error.roomSetup);
+            assert.deepEqual(sent.slice(before.length).map(e => e.type),
+                ["m.room.member", "m.room.join_rules", "m.room.name"]);
+            assert.ok(sent.slice(before.length).every(e => e.roomId === "!1"));
         },
         "refuses a create draft whose server chain is not the custodian's": async assert => {
             const {identity, crypto} = await aliceIdentity();

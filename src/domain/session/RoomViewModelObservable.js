@@ -33,6 +33,7 @@ export class RoomViewModelObservable extends ObservableValue {
         this._routerSubscription = null;
         this._routedSession = undefined;
         this._routeGeneration = 0;
+        this._statusGeneration = 0;
         this._disposed = false;
         this._sessionViewModel = sessionViewModel;
         this.id = roomIdOrLocalId;
@@ -78,8 +79,11 @@ export class RoomViewModelObservable extends ObservableValue {
     }
 
     async _updateStatus(status, session, generation) {
+        // a later status update supersedes this one even if it resolves first
+        const statusGeneration = ++this._statusGeneration;
         const viewModel = await this._statusToViewModel(status);
-        if (generation !== this._routeGeneration || this._disposed || this._session() !== session) {
+        if (generation !== this._routeGeneration || statusGeneration !== this._statusGeneration ||
+            this._disposed || this._session() !== session) {
             viewModel?.dispose();
             return;
         }

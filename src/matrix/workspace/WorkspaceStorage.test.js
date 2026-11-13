@@ -45,25 +45,25 @@ export function tests() {
             const backing = memoryBacking();
             const workspaces = storage(backing);
             let workspace = workspaces.ensureForSession("s1");
-            const record = JSON.parse(backing.items.get("ws"));
-            record.workspaces[workspace.id].connections.push({id: "dest", role: "destination", sessionId: "s2"});
-            backing.setItem("ws", JSON.stringify(record));
-            workspaces.setRoomOwner(workspace.id, "!moved", "dest");
-            workspace = workspaces.setConnectionSession(workspace.id, "dest", "s3");
-            assert.equal(workspace.ownerOf("!moved"), "dest");
-            assert.equal(workspace.connection("dest").sessionId, "s3");
+            const added = workspaces.addConnection(workspace.id, {sessionId: "s2"});
+            workspace = added.workspace;
+            const dest = added.connectionId;
+            workspaces.setRoomOwner(workspace.id, "!moved", dest);
+            workspace = workspaces.setConnectionSession(workspace.id, dest, "s3");
+            assert.equal(workspace.ownerOf("!moved"), dest);
+            assert.equal(workspace.connection(dest).sessionId, "s3");
             assert.equal(workspaces.forSession("s3").id, workspace.id);
             assert.equal(workspaces.forSession("s2"), undefined);
         },
         "ownership stays sparse": assert => {
             const backing = memoryBacking();
             const workspaces = storage(backing);
-            const workspace = workspaces.ensureForSession("s1");
-            const record = JSON.parse(backing.items.get("ws"));
-            record.workspaces[workspace.id].connections.push({id: "dest", role: "destination", sessionId: "s2"});
-            backing.setItem("ws", JSON.stringify(record));
-            workspaces.setRoomOwner(workspace.id, "!room", "dest");
-            assert.deepEqual(JSON.parse(backing.items.get("ws")).workspaces[workspace.id].rooms, {"!room": "dest"});
+            let workspace = workspaces.ensureForSession("s1");
+            const added = workspaces.addConnection(workspace.id, {sessionId: "s2"});
+            workspace = added.workspace;
+            const dest = added.connectionId;
+            workspaces.setRoomOwner(workspace.id, "!room", dest);
+            assert.deepEqual(JSON.parse(backing.items.get("ws")).workspaces[workspace.id].rooms, {"!room": dest});
             const updated = workspaces.setRoomOwner(workspace.id, "!room", workspace.sourceConnectionId);
             assert.deepEqual(JSON.parse(backing.items.get("ws")).workspaces[workspace.id].rooms, {});
             assert.equal(updated.ownerOf("!room"), workspace.sourceConnectionId);
@@ -85,9 +85,7 @@ export function tests() {
             const backing = memoryBacking();
             const workspaces = storage(backing);
             const workspace = workspaces.ensureForSession("s1");
-            const record = JSON.parse(backing.items.get("ws"));
-            record.workspaces[workspace.id].connections.push({id: "dest", role: "destination", sessionId: "s2"});
-            backing.setItem("ws", JSON.stringify(record));
+            workspaces.addConnection(workspace.id, {sessionId: "s2"});
             assert.equal(isVisibleSessionInfo({id: "s1"}, workspaces), true);
             assert.equal(isVisibleSessionInfo({id: "s2", hidden: true}, workspaces), false);
             assert.equal(isVisibleSessionInfo({id: "orphan", hidden: true}, workspaces), true);
@@ -102,6 +100,16 @@ export function tests() {
             assert.throws(() => workspaces.addConnection(a.id, {sessionId: "s3"}), /already has a connection/);
             assert.throws(() => workspaces.addConnection(a.id, {sessionId: "s2"}), /already has a connection/);
             assert.throws(() => workspaces.addConnection(a.id, {role: "source", sessionId: "s4"}), /destination/);
+        },
+        "setConnectionSession rejects a session another connection already uses": assert => {
+            const workspaces = storage();
+            const a = workspaces.ensureForSession("s1");
+            const added = workspaces.addConnection(a.id, {sessionId: "s2"});
+            assert.throws(() => workspaces.setConnectionSession(a.id, added.connectionId, "s1"),
+                /already has a connection/);
+            // the connection may keep its own session ID
+            const same = workspaces.setConnectionSession(a.id, added.connectionId, "s2");
+            assert.equal(same.connection(added.connectionId).sessionId, "s2");
         },
         "a corrupt record is refused with a clear error": assert => {
             const corrupt = JSON.stringify({version: 1, workspaces: {x: {}}});

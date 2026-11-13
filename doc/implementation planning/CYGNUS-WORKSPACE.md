@@ -116,7 +116,9 @@ the key is spent, so the move is retry-only:
    including the source device, and the carried cross-signing seeds); the
    destination certifies its own device and backs the next key up to its own
    secret storage. Both connections are in the same browser, so nothing is
-   transported.
+   transported. The destination refuses a bundle whose revoked list already
+   contains its own device ID, since certifying that device would publish a
+   revoked signer.
 4. The destination imports the full chain with the revoked list, which includes
    the source device. On failure, retry the same import.
 5. Once the import and backup are confirmed, the source is retired: its

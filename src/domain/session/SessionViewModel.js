@@ -123,6 +123,22 @@ export class SessionViewModel extends ViewModel {
 
         const rightpanel = this.navigation.observe("right-panel");
         this.track(rightpanel.subscribe(() => this._updateRightPanel()));
+        // a room can change owner while the panel is open; rebuild it for the
+        // current route rather than keep the previous session's room
+        this.track(this._roomRouter.subscribeChanges(() => {
+            if (!this.navigation.path.get("right-panel")?.value) {
+                return;
+            }
+            const roomId = this.navigation.path.get("room")?.value;
+            const session = this._roomRouter.sessionForRoom(roomId);
+            const room = session?.rooms.get(roomId);
+            if (!room) {
+                // no valid route remains: close the panel
+                this.navigation.applyPath(this.navigation.path.until("room"));
+            } else if (room !== this._rightPanelRoom || session !== this._rightPanelSession) {
+                this._updateRightPanel();
+            }
+        }));
         this._updateRightPanel();
     }
 
@@ -413,7 +429,12 @@ export class SessionViewModel extends ViewModel {
             const roomId = this.navigation.path.get("room")?.value;
             const session = this._roomRouter.sessionForRoom(roomId);
             const room = session?.rooms.get(roomId);
+            this._rightPanelRoom = room;
+            this._rightPanelSession = session;
             this._rightPanelViewModel = this.track(new RightPanelViewModel(this.childOptions({room, session})));
+        } else {
+            this._rightPanelRoom = undefined;
+            this._rightPanelSession = undefined;
         }
         this.emitChange("rightPanelViewModel");
     }

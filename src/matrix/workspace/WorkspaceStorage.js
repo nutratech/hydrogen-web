@@ -198,12 +198,22 @@ export class WorkspaceStorage {
         if (typeof sessionId !== "string" || !sessionId) {
             throw new TypeError("a session ID is required");
         }
-        return this._mutateWorkspace(workspaceId, record => {
+        return this._mutate(data => {
+            const record = data.workspaces[workspaceId];
+            if (!record) {
+                throw new Error(`no workspace ${workspaceId}`);
+            }
             const connection = record.connections.find(c => c.id === connectionId);
             if (!connection) {
                 throw new Error(`workspace ${workspaceId} has no connection ${connectionId}`);
             }
+            const taken = Object.values(data.workspaces).some(r =>
+                r.connections.some(c => c.sessionId === sessionId && !(r === record && c === connection)));
+            if (taken) {
+                throw new Error(`session ${sessionId} already has a connection`);
+            }
             connection.sessionId = sessionId;
+            return record;
         });
     }
 

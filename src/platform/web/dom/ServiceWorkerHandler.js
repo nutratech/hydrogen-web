@@ -79,6 +79,7 @@ export class ServiceWorkerHandler {
         try {
             return this._workspaceStorage?.forSession(sessionId)?.sourceSessionId === open;
         } catch (err) {
+            console.error("could not read workspace storage to check for an open session", err);
             return false;
         }
     }

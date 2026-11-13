@@ -26,6 +26,14 @@ function same(a, b) {
 }
 
 /**
+ * Sends in progress, keyed by transaction ID and shared across instances, so
+ * overlapping calls for the same transaction await one draft and one signed
+ * event instead of signing two.
+ * @type {Map<string, Promise<{eventId: string, event: object}>>}
+ */
+const inFlightSends = new Map();
+
+/**
  * Check an assisted-mode draft (§9) against the request that produced it.
  * Returns an error message, or `undefined` when the draft may be signed.
  *
@@ -146,6 +154,21 @@ export class CygnusEventSigner {
      * @returns {Promise<{eventId: string, event: object}>} the submitted event and its ID
      */
     async send(request, {log, txnId = this._createTxnId()} = {}) {
+        const ongoing = inFlightSends.get(txnId);
+        if (ongoing) {
+            return ongoing;
+        }
+        const run = this._send(request, {log, txnId}).finally(() => {
+            if (inFlightSends.get(txnId) === run) {
+                inFlightSends.delete(txnId);
+            }
+        });
+        inFlightSends.set(txnId, run);
+        return run;
+    }
+
+    /** Draft, sign and submit one request; `send` coalesces callers by transaction ID. */
+    async _send(request, {log, txnId}) {
         let signed = await this._get(signedEventKey(txnId));
         if (!signed) {
             signed = await this._draftAndSign(request, txnId, log);

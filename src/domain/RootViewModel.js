@@ -67,7 +67,10 @@ export class RootViewModel extends ViewModel {
             try {
                 sourceSessionId = await this._sourceSessionIdForHidden(sessionId);
             } catch (err) {
-                this._setSection(() => this._error = err);
+                // an obsolete request must not replace the view of a newer navigation
+                if (this.navigation.path.get("session")?.value === navigationSessionId) {
+                    this._setSection(() => this._error = err);
+                }
                 return;
             }
             if (this.navigation.path.get("session")?.value !== navigationSessionId) {

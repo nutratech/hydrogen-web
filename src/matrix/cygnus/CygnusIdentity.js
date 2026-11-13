@@ -235,9 +235,15 @@ export class CygnusIdentity {
      * chain.
      */
     rotate({log} = {}) {
-        // a second call waits for the first, then sees its result (a clean record, or the same pending link)
-        const run = (this._rotating ?? Promise.resolve()).catch(() => {}).then(() => this._rotate({log}));
-        this._rotating = run;
+        // `rotate` and `prepareMove` share one guard: a second call waits for
+        // the first, so neither can sign a conflicting link at the same height
+        return this._withOperation(() => this._rotate({log}));
+    }
+
+    /** Run identity-changing operations one at a time. */
+    _withOperation(fn) {
+        const run = (this._operation ?? Promise.resolve()).catch(() => {}).then(fn);
+        this._operation = run;
         return run;
     }
 
@@ -279,6 +285,10 @@ export class CygnusIdentity {
     }
 
     async prepareMove({custodian, displayUserId, roomIds}) {
+        return this._withOperation(() => this._prepareMove({custodian, displayUserId, roomIds}));
+    }
+
+    async _prepareMove({custodian, displayUserId, roomIds}) {
         if (this._record.pendingMove) {
             let pending = this._record.pendingMove;
             if (pending.custodian !== custodian || pending.displayUserId !== displayUserId) {
@@ -373,12 +383,17 @@ export class CygnusIdentity {
         await this._persist();
     }
 
-    async _assertRotationKey(expectedSeed) {
+    /** Back up this identity's current rotation key if secret storage has none. */
+    async ensureRotationKeyBackedUp(log) {
+        await this._assertRotationKey(this._record.rotationSeed, log);
+    }
+
+    async _assertRotationKey(expectedSeed, log) {
         if (!this._secretFetcher) return;
         const stored = await this._secretFetcher.readSecretStorage(ROTATION_KEY_SECRET);
         if (!stored) {
             // never backed up (e.g. created before Hydrogen wrote secret storage)
-            await this._secretFetcher.writeSecret(ROTATION_KEY_SECRET, toBase64Standard(expectedSeed));
+            await this._secretFetcher.writeSecret(ROTATION_KEY_SECRET, toBase64Standard(expectedSeed), log);
             return;
         }
         if (toBase64Url(stored) !== expectedSeed) {

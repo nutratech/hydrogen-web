@@ -161,6 +161,11 @@ export class WorkspaceConnections {
                     try {
                         if (!this._disposed) {
                             this._claimRoomsOf(connectionId, client.session);
+                            if (this._statuses.get(connectionId)?.status === ConnectionStatus.Unavailable) {
+                                // the claim failed and already disposed the client: not ready
+                                resolve();
+                                return;
+                            }
                             this._watchAuth(connectionId, client);
                             this._sessions.set(connectionId, client.session);
                             this._setStatus(connectionId, {status: ConnectionStatus.Ready});
@@ -250,6 +255,11 @@ export class WorkspaceConnections {
         });
         release(this.workspace.roomsOwnedBy(connectionId));
         claim([...session.rooms.keys(), ...session.invites.keys()]);
+        if (this._statuses.get(connectionId)?.status === ConnectionStatus.Unavailable) {
+            // the initial claim failed and already disposed the client; do not
+            // subscribe a disposed session
+            return;
+        }
         const handler = {
             onAdd: key => claim([key]),
             onUpdate() {},
@@ -289,12 +299,19 @@ export class WorkspaceConnections {
                     console.error("workspace: could not reassign a room the source left", error);
                 }
             },
-            onReset() {},
+            onReset: () => reconcile(),
+        };
+        const reconcile = () => {
+            for (const key of [...session.rooms.keys(), ...session.invites.keys()]) {
+                claim(key);
+            }
         };
         this._claimSubscriptions.set(this.workspace.sourceConnectionId, () => {
             unsubscribes.forEach(unsubscribe => unsubscribe());
         });
         const unsubscribes = [session.rooms.subscribe(handler), session.invites.subscribe(handler)];
+        // rooms already loaded before the subscription
+        reconcile();
     }
 
     /**

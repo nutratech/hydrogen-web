@@ -81,7 +81,7 @@ export class CreateRoomView extends TemplateView {
                     t.div({className: "form-group"}, [
                         t.div(t.button({className: "link", type: "button", onClick: () => vm.toggleAdvancedShown()},
                             vm => vm.isAdvancedShown ? vm.i18n`Hide advanced settings` : vm.i18n`Show advanced settings`)),
-                        t.div({className: {"form-row check": true, hidden: vm => !vm.isAdvancedShown}}, [
+                        t.div({className: {"form-row check": true, hidden: vm => !vm.isAdvancedShown || vm.isCygnus}}, [
                             t.input({type: "checkbox", name: "isFederationDisabled", id: "isFederationDisabled", checked: vm.isFederationDisabled}),
                             t.label({for: "isFederationDisabled"}, [
                                 vm.i18n`Disable federation`,

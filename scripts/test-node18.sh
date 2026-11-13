@@ -35,6 +35,7 @@ cd "$(dirname "$0")/.."
 PATH="$NODE_BIN_DIR$PATH" TZ=UTC node node_modules/impunity/cmd.js \
     --entry-point src/platform/web/main.js src/platform/web/Platform.js src/matrix/cygnus/CygnusVerifier.test.js \
     src/matrix/cygnus/CygnusFlows.test.js src/matrix/login/deviceIdLogin.test.js \
+    src/matrix/sessioninfo/localstorage/SessionInfoStorage.test.js \
     src/matrix/verification/publishCrossSigningKeys.test.js src/matrix/workspace/WorkspaceStorage.test.js \
     src/matrix/workspace/RoomRouter.test.js \
     src/matrix/workspace/WorkspaceConnections.test.js \

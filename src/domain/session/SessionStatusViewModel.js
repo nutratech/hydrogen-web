@@ -145,7 +145,8 @@ export class SessionStatusViewModel extends ViewModel {
 
     get isSecretStorageShown() {
         // TODO: we need a model here where we can have multiple messages queued up and their buttons don't bleed into each other.
-        return this._status === SessionStatus.Syncing && this._session.needsKeyBackup.get() && !this._dismissSecretStorage;
+        return this._status === SessionStatus.Syncing && !this._connectionProblem &&
+            this._session.needsKeyBackup.get() && !this._dismissSecretStorage;
     }
 
     get canDismiss() {

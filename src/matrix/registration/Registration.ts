@@ -37,7 +37,8 @@ export class Registration {
         this._flowSelector = flowSelector ?? (flows => flows[0]);
     }
 
-    async start(): Promise<BaseRegistrationStage> {
+    /** The first stage, or `undefined` when the homeserver registered the account without any (read `authData`). */
+    async start(): Promise<BaseRegistrationStage | undefined> {
         const request = this._hsApi.register(
             this._accountDetails.username,
             this._accountDetails.password,
@@ -50,7 +51,7 @@ export class Registration {
         if (await request.responseCode() === 200) {
             // the server needs no further stages; there is no stage to return, so say so plainly
             this._acceptRegistration(response as RegistrationResponseSuccess);
-            throw new Error("The homeserver registered the account without any authentication stage; read `authData` instead.");
+            return undefined;
         }
         return this.parseStagesFromResponse(response);
     }

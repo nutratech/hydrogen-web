@@ -167,7 +167,13 @@ export class CygnusService {
         await this.load(log);
         this._requireSupport();
         if (this.identity.get()) {
-            throw new Error("this session already has a Cygnus identity");
+            // a previous create persisted the identity but failed to back up its
+            // rotation key; resume that instead of minting another principal
+            const existing = this.identity.get();
+            if (!existing.isRetired && existing.rotationSeed) {
+                await existing.ensureRotationKeyBackedUp(log);
+            }
+            return existing;
         }
         if (!this._secretFetcher.hasSecretStorage) {
             throw new Error("unlock secret storage before creating a Cygnus identity");
@@ -234,6 +240,11 @@ export class CygnusService {
         return this._rooms().createRoom({...options, log});
     }
 
+    /** Finish a room whose `createRoom` failed after the create event. */
+    finishRoom(roomId, options, log) {
+        return this._rooms().finishRoom(roomId, {...options, log});
+    }
+
     joinRoom(roomId, log, via) {
         return this._rooms().joinRoom(roomId, {log, via});
     }
@@ -267,8 +278,10 @@ export class CygnusService {
             this._crypto.publicKey(base64ToBase64Url(masterSeed)) !== identity.masterKey) {
             throw new Error("source secret storage does not contain the cross-signing keys for this identity");
         }
+        let revokedSelf = false;
         if (!identity.pendingMove && !identity.revokedDeviceIds.includes(identity.deviceId)) {
             await identity.revokeDevice(identity.deviceId);
+            revokedSelf = true;
         }
         // Stop ordinary event signing before preparing or encrypting the
         // handoff. A failure here can resume the exact same signed move link.
@@ -277,8 +290,11 @@ export class CygnusService {
         try {
             pendingMove = await identity.prepareMove({custodian, displayUserId, roomIds: allRooms});
         } catch (err) {
-            // no signed move link exists yet: let this device sign again
-            await identity.cancelMoveHandoff().catch(() => {});
+            // no signed move link exists yet: let this device sign again, unless it just
+            // revoked itself, which the next rotation would publish; a retry resumes instead
+            if (!revokedSelf && !identity.revokedDeviceIds.includes(identity.deviceId)) {
+                await identity.cancelMoveHandoff().catch(() => {});
+            }
             throw err;
         }
         if (pendingMove.custodian !== custodian || pendingMove.displayUserId !== displayUserId) {
@@ -330,6 +346,10 @@ export class CygnusService {
         this._validateMoveBundle(bundle, custodian);
         if (!this._secretFetcher?.hasSecretStorage) {
             throw new Error("unlock destination secret storage before moving the Cygnus identity");
+        }
+        // the source signs the move without knowing this device ID; a collision would be revoked
+        if (bundle.revokedDeviceIds.includes(this._deviceId)) {
+            throw new Error("this device ID is revoked in the move bundle; sign in with a different device ID");
         }
         // check everything that can be checked locally before changing the account's keys
         if (this._crypto.publicKey(base64ToBase64Url(bundle.masterSeed)) !== bundle.record.masterKey) {

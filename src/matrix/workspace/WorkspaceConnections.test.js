@@ -282,6 +282,51 @@ export function tests() {
             assert.equal(observable.get().from, "c0");
             observable.dispose();
         },
+        "source rooms already loaded at startup are reclaimed from a stale owner": async assert => {
+            const env = setup({sourceHolds: {rooms: ["!r"]}});
+            const dest = env.addDestination();
+            const workspace = env.workspaceStorage.getAll()[0];
+            env.workspaceStorage.setRoomOwner(workspace.id, "!r", dest);
+            const connections = env.connections();
+            assert.equal(connections.workspace.ownerOf("!r"), connections.workspace.sourceConnectionId);
+        },
+        "a destination whose rooms cannot be claimed is not marked ready": async assert => {
+            const env = setup({clientOptions: {holds: {rooms: ["!dst"]}}});
+            const dest = env.addDestination();
+            const connections = env.connections();
+            connections.roomRouter.claimRooms = () => { throw new Error("claim failed"); };
+            await connections.start();
+            assert.equal(connections.statusOf(dest).status, ConnectionStatus.Unavailable);
+            assert.equal(env.created[0].disposed, true);
+            assert.equal(connections.roomRouter.sessionForConnection(dest), undefined);
+        },
+        "an older room-status update cannot replace a newer one": async assert => {
+            const session = {name: "source"};
+            const sessionViewModel = {
+                roomRouter: {sessionForLocalId: () => undefined, sessionForRoom: () => session},
+            };
+            const observable = new RoomViewModelObservable(sessionViewModel, "!r");
+            const first = {disposed: 0, dispose() { this.disposed++; }};
+            const second = {disposed: 0, dispose() { this.disposed++; }};
+            let releaseFirst;
+            let call = 0;
+            observable._statusToViewModel = async () => {
+                if (call++ === 0) {
+                    await new Promise(resolve => { releaseFirst = resolve; });
+                    return first;
+                }
+                return second;
+            };
+            observable._routeGeneration = 1;
+            const older = observable._updateStatus(0, session, 1);
+            await observable._updateStatus(1, session, 1);
+            releaseFirst();
+            await older;
+            assert.equal(observable.get(), second);
+            assert.equal(first.disposed, 1);
+            assert.equal(second.disposed, 0);
+            observable.dispose();
+        },
         "a rejected destination token makes only that connection unavailable, asking to sign in again": async assert => {
             const env = setup({clientOptions: {holds: {rooms: ["!dst"]}}});
             const dest = env.addDestination();

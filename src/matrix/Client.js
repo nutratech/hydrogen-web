@@ -324,6 +324,10 @@ export class Client {
         const lastVersionsResponse = await hsApi
             .versions({ timeout: 10000, log })
             .response();
+        if (this._isDisposed) {
+            // disposed while waiting: do not register auth or build a session
+            return;
+        }
         const mediaRepository = new MediaRepository({
             homeserver: sessionInfo.homeServer,
             sessionId: sessionInfo.id,
