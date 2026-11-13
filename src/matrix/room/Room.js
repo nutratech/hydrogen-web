@@ -595,15 +595,16 @@ export class Room extends BaseRoom {
         if (!userId) {
             throw new Error("userId is null/undefined");
         }
+        // A kick is an ordinary leave event sent by someone else; "kick" is not
+        // a Matrix membership value. Normalise once, before either send path.
+        const eventMembership = membership === "kick" ? "leave" : membership;
         if (this.isCygnus) {
             const cygnus = this._getCygnus?.();
             if (!cygnus) throw new Error("Cygnus is unavailable for this room");
             const principal = isPrincipal(userId) ? userId : await cygnus.lookupPrincipal(userId, log);
-            return cygnus.sendMembershipEvent(this.id, principal, membership, reason, log);
+            return cygnus.sendMembershipEvent(this.id, principal, eventMembership, reason, log);
         }
-        // A kick is an ordinary leave event sent by someone else; "kick" is not
-        // a Matrix membership value.
-        const content = {membership: membership === "kick" ? "leave" : membership};
+        const content = {membership: eventMembership};
         if (reason) {
             content.reason = reason;
         }

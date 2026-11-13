@@ -9,6 +9,7 @@ import {CygnusEventSigner, checkDraft, FLOORS_SESSION_KEY, signedEventKey} from 
 import {ConnectionError, HomeServerError} from "../error.js";
 import {CygnusRooms} from "./CygnusRooms.js";
 import {CygnusService} from "./CygnusService.js";
+import {Room} from "../room/Room.js";
 import {CYGNUS_ROOM_VERSION} from "./constants.js";
 import anotherjson from "another-json";
 import {webcrypto} from "node:crypto";
@@ -572,13 +573,60 @@ export function tests() {
             service._isSupported = true;
             service.identity.set(identity);
             await service.sendStateEvent(ROOM_ID, "m.room.topic", {topic: "Lobby"});
-            await service.sendMembershipEvent(ROOM_ID, USER_U, "kick", "spam");
+            // Room maps a kick to leave before it reaches the signer.
+            await service.sendMembershipEvent(ROOM_ID, USER_U, "leave", "spam");
             assert.deepEqual(sent.map(e => e.type), ["m.room.topic", "m.room.member"]);
             assert.equal(drafts[0].state_key, "");
             assert.deepEqual(sent[0].content, {topic: "Lobby"});
             assert.equal(drafts[1].state_key, USER_U);
             // "kick" is not a membership: it is a leave event sent by someone else
             assert.deepEqual(sent[1].content, {membership: "leave", reason: "spam"});
+        },
+        "Room normalises kick to leave and returns event IDs on both paths": async assert => {
+            const makeRoom = (roomVersion, cygnus) => {
+                const room = Object.create(Room.prototype);
+                room._roomId = ROOM_ID;
+                room._summary = {data: {roomVersion}};
+                room._getCygnus = () => cygnus;
+                room._platform = {logger: {wrapOrRun: async (log, name, fn) => fn(log)}};
+                return room;
+            };
+            const plainCalls = [];
+            const plain = makeRoom(undefined);
+            plain._hsApi = {
+                sendState: (roomId, type, stateKey, content) => {
+                    plainCalls.push({roomId, type, stateKey, content});
+                    return request({event_id: "$plain"});
+                },
+                invite: (roomId, userId, reason) => {
+                    plainCalls.push({roomId, userId, reason});
+                    return request({});
+                },
+            };
+            assert.equal(await plain.kickUser("@bob:hs.tld", "spam"), "$plain");
+            assert.deepEqual(plainCalls[0].content, {membership: "leave", reason: "spam"});
+            assert.equal(await plain.banUser("@bob:hs.tld", "spam"), "$plain");
+            assert.deepEqual(plainCalls[1].content, {membership: "ban", reason: "spam"});
+            await plain.inviteUser("@bob:hs.tld", "hello");
+            assert.equal(plainCalls[2].userId, "@bob:hs.tld");
+
+            const cygnusCalls = [];
+            const cygnus = {
+                lookupPrincipal: async () => USER_U,
+                sendMembershipEvent: async (roomId, principal, membership, reason) => {
+                    cygnusCalls.push({roomId, principal, membership, reason});
+                    return "$cygnus";
+                },
+            };
+            const cygnusRoom = makeRoom(CYGNUS_ROOM_VERSION, cygnus);
+            cygnusRoom._hsApi = {};
+            assert.equal(await cygnusRoom.kickUser(USER_U, "spam"), "$cygnus");
+            assert.deepEqual(cygnusCalls[0], {roomId: ROOM_ID, principal: USER_U, membership: "leave", reason: "spam"});
+            assert.equal(await cygnusRoom.banUser(USER_U, "spam"), "$cygnus");
+            assert.equal(cygnusCalls[1].membership, "ban");
+            await cygnusRoom.inviteUser("@alice:chat.example.org", "hello");
+            assert.equal(cygnusCalls[2].principal, USER_U);
+            assert.equal(cygnusCalls[2].membership, "invite");
         },
         "creating an identity backs up the rotation key only after the custodian accepts": async assert => {
             const secrets = memorySecrets();

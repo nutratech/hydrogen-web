@@ -592,10 +592,9 @@ export class CygnusService {
         return eventId;
     }
 
-    /** Send a device-signed membership event for another principal (invite, kick or ban). */
+    /** Send a device-signed membership event for another principal (invite, leave or ban). */
     async sendMembershipEvent(roomId, principal, membership, reason, log) {
-        // A kick is a leave event sent by someone other than the target.
-        const content = {membership: membership === "kick" ? "leave" : membership};
+        const content = {membership};
         if (reason) {
             content.reason = reason;
         }

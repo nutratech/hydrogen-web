@@ -47,18 +47,19 @@ export class PowerLevels {
         return this._myLevel >= this._getActionLevel("ban");
     }
 
-    /** Another member can be kicked only below the sender's own level (and while still present). */
+    /** Kick needs a higher level and only makes sense while the member is present and not banned. */
     canKickUser(userId, membership) {
-        return this.canKick && this._canActOn(userId, membership);
+        return this.canKick && membership !== "leave" && membership !== "ban" &&
+            this._hasHigherLevelThan(userId);
     }
 
-    /** Another member can be banned only below the sender's own level (and while not already banned). */
+    /** Ban needs a higher level, but is also allowed against someone who already left. */
     canBanUser(userId, membership) {
-        return this.canBan && membership !== "ban" && this._canActOn(userId, membership);
+        return this.canBan && membership !== "ban" && this._hasHigherLevelThan(userId);
     }
 
-    _canActOn(userId, membership) {
-        return membership !== "leave" && this.getUserLevel(userId) < this._myLevel;
+    _hasHigherLevelThan(userId) {
+        return this.getUserLevel(userId) < this._myLevel;
     }
 
     get _myLevel() {
@@ -186,7 +187,10 @@ export function tests() {
             assert.equal(pl.canBanUser(charly, "join"), false);
             assert.equal(pl.canBanUser(alice, "join"), false);
             assert.equal(pl.canKickUser(bob, "leave"), false);
+            assert.equal(pl.canKickUser(bob, "ban"), false);
             assert.equal(pl.canBanUser(bob, "ban"), false);
+            // a preemptive ban is allowed against someone who already left
+            assert.equal(pl.canBanUser(bob, "leave"), true);
         },
     }
 }
