@@ -29,6 +29,7 @@ export class CreateRoomViewModel extends ViewModel {
         this._isCygnus = false;
         this._isCreating = false;
         this._error = undefined;
+        this._cygnusRoomRecovery = undefined;
         const cygnus = session.cygnus;
         if (cygnus) {
             this.track(cygnus.identity.subscribe(() => this.emitChange("canUseCygnus")));
@@ -96,6 +97,9 @@ export class CreateRoomViewModel extends ViewModel {
     }
 
     create() {
+        if (this._cygnusRoomRecovery) {
+            return this._createCygnusRoom();
+        }
         if (this.isCygnus) {
             return this._createCygnusRoom();
         }
@@ -128,14 +132,24 @@ export class CreateRoomViewModel extends ViewModel {
         this._error = undefined;
         this.emitChange("isCreating");
         try {
-            const roomId = await this.logger.run("cygnus create room", log => this._session.cygnus.createRoom({
-                name: this._name,
-                topic: this._topic || undefined,
-                isPublic: this._isPublic,
-            }, log));
+            const roomId = await this.logger.run("cygnus create room", log => {
+                if (this._cygnusRoomRecovery) {
+                    const {roomId, roomSetup} = this._cygnusRoomRecovery;
+                    return this._session.cygnus.finishRoom(roomId, roomSetup, log);
+                }
+                return this._session.cygnus.createRoom({
+                    name: this._name,
+                    topic: this._topic || undefined,
+                    isPublic: this._isPublic,
+                }, log);
+            });
+            this._cygnusRoomRecovery = undefined;
             this.navigation.push("room", roomId);
         } catch (err) {
             this._error = err.message;
+            if (err.roomId && err.roomSetup) {
+                this._cygnusRoomRecovery = {roomId: err.roomId, roomSetup: err.roomSetup};
+            }
         } finally {
             this._isCreating = false;
             this.emitChange("isCreating");

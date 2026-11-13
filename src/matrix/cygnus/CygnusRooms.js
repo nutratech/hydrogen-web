@@ -5,6 +5,10 @@ Please see LICENSE files in the repository root for full details.
 
 import {CYGNUS_ROOM_VERSION} from "./constants.js";
 
+function leaveTxnKey(roomId) {
+    return `cygnus.leaveTxn.${roomId}`;
+}
+
 /**
  * Room lifecycle for MSC00FC rooms, as the user-signed events a device sends.
  *
@@ -61,20 +65,20 @@ export class CygnusRooms {
 
     /** Join, set the join rule and the optional name and topic, idempotently. */
     async _finishRoom(roomId, {name, topic, isPublic}, log) {
-        await this._join(roomId, log, undefined, `cygnus-create-${roomId}-join`);
+        await this._join(roomId, log, undefined, `cygnus-create-${roomId}-join`, true);
         await this._signer.send({
             roomId,
             type: "m.room.join_rules",
             stateKey: "",
             content: {join_rule: isPublic ? "public" : "invite"},
-        }, {log, txnId: `cygnus-create-${roomId}-join-rules`});
+        }, {log, txnId: `cygnus-create-${roomId}-join-rules`, retainConfirmed: true});
         if (name) {
             await this._signer.send({roomId, type: "m.room.name", stateKey: "", content: {name}},
-                {log, txnId: `cygnus-create-${roomId}-name`});
+                {log, txnId: `cygnus-create-${roomId}-name`, retainConfirmed: true});
         }
         if (topic) {
             await this._signer.send({roomId, type: "m.room.topic", stateKey: "", content: {topic}},
-                {log, txnId: `cygnus-create-${roomId}-topic`});
+                {log, txnId: `cygnus-create-${roomId}-topic`, retainConfirmed: true});
         }
     }
 
@@ -92,23 +96,29 @@ export class CygnusRooms {
         return this._join(roomId, log, via, txnId);
     }
 
-    leaveRoom(roomId, {log, txnId = `cygnus-leave-${this._identity.height}-${roomId}`} = {}) {
-        // the same transaction ID on retry resends the stored signed event instead of signing a second leave
+    async leaveRoom(roomId, {log, txnId} = {}) {
+        // Persist one ID for this leave cycle: retries reuse it, and a later
+        // confirmed join clears it so the next leave gets a fresh transaction.
+        if (!txnId) {
+            txnId = await this._signer.getOrCreateTxnId(leaveTxnKey(roomId));
+        }
         return this._signer.send({
             roomId,
             type: "m.room.member",
             stateKey: this._identity.principal,
             content: {membership: "leave", custodian: this._identity.custodian},
-        }, {log, txnId});
+        }, {log, txnId, retainConfirmed: true});
     }
 
-    async _join(roomId, log, via, txnId) {
-        return this._signer.send({
+    async _join(roomId, log, via, txnId, retainConfirmed = false) {
+        const result = await this._signer.send({
             roomId,
             type: "m.room.member",
             stateKey: this._identity.principal,
             content: {membership: "join", custodian: this._identity.custodian},
             via,
-        }, {log, txnId});
+        }, {log, txnId, retainConfirmed});
+        await this._signer.clearTxnId?.(leaveTxnKey(roomId));
+        return result;
     }
 }

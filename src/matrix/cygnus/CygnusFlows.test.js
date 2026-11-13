@@ -850,6 +850,44 @@ export function tests() {
             assert.equal(sent.length, 1);
             assert.equal(a.eventId, b.eventId);
         },
+        "different transaction IDs are serialized through confirmation": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity();
+            const {api} = assistedApi(crypto, identity);
+            let releaseFirst;
+            const firstDraftGate = new Promise(resolve => releaseFirst = resolve);
+            let markFirstDraft;
+            const firstDraftStarted = new Promise(resolve => markFirstDraft = resolve);
+            let draftCount = 0;
+            const draft = api.cygnusEventDraft;
+            api.cygnusEventDraft = body => {
+                draftCount += 1;
+                if (draftCount === 1) {
+                    markFirstDraft();
+                    return {
+                        response: async () => {
+                            await firstDraftGate;
+                            return draft(body).response();
+                        },
+                    };
+                }
+                return draft(body);
+            };
+            const signer = new CygnusEventSigner({
+                identity, crypto, hsApi: api, storage, createTxnId: () => `t${draftCount}`,
+            });
+            const first = signer.send({roomId: ROOM_ID, type: "m.room.message", content: {body: "a"}},
+                {txnId: "first"});
+            const second = signer.send({roomId: ROOM_ID, type: "m.room.message", content: {body: "b"}},
+                {txnId: "second"});
+            await firstDraftStarted;
+            await new Promise(resolve => setTimeout(resolve, 0));
+            // the second send cannot draft until the first confirms its floor
+            assert.equal(draftCount, 1);
+            releaseFirst();
+            const [a, b] = await Promise.all([first, second]);
+            assert.equal(draftCount, 2);
+            assert.notEqual(a.eventId, b.eventId);
+        },
         "refuses a draft citing an older epoch than the one observed": async assert => {
             const {identity, crypto, storage} = await aliceIdentity();
             const epoch = (eventId, height) => ({event_id: eventId, type: "m.room.user_epoch", state_key: USER_U, content: {height}});
@@ -975,6 +1013,73 @@ export function tests() {
             assert.equal(sent[1].state_key, identity.principal);
             assert.deepEqual(sent[1].content, {membership: "join", custodian: SERVER_A});
             assert.equal(sent[1].room_id, roomId);
+        },
+        "confirmed setup steps are reused when setup resumes": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity();
+            const {api, drafts} = assistedApi(crypto, identity, {
+                draft: (req, prevEvents) => {
+                    const draft = draftFor(crypto, identity, req, {prevEvents});
+                    if (req.type === "m.room.create") {
+                        draft.content = {...req.content,
+                            creator_links: {...req.content.creator_links, server: SERVER_A_LINKS}};
+                        draft.hashes = {sha256: crypto.contentHash(draft).contentHash};
+                    }
+                    return draft;
+                },
+            });
+            let failName = true;
+            const draft = api.cygnusEventDraft;
+            api.cygnusEventDraft = body => {
+                if (body.type === "m.room.name" && failName) {
+                    failName = false;
+                    return request(new Error("name failed"));
+                }
+                return draft(body);
+            };
+            let counter = 0;
+            const signer = new CygnusEventSigner({
+                identity, crypto, hsApi: api, storage, createTxnId: () => `t${counter++}`,
+            });
+            const rooms = new CygnusRooms({identity, signer});
+            let error;
+            try {
+                await rooms.createRoom({name: "Lobby"});
+            } catch (err) {
+                error = err;
+            }
+            assert.ok(error?.roomId);
+            const before = drafts.length;
+            await rooms.finishRoom(error.roomId, error.roomSetup);
+            // the join and join rule were already confirmed, so only the failed name is drafted again
+            assert.deepEqual(drafts.slice(before).map(body => body.type), ["m.room.name"]);
+        },
+        "leaving after rejoining uses a fresh transaction ID": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity();
+            const {api, sent} = assistedApi(crypto, identity);
+            let counter = 0;
+            const signer = new CygnusEventSigner({
+                identity, crypto, hsApi: api, storage, createTxnId: () => `t${counter++}`,
+            });
+            const txnIds = [];
+            const send = signer.send.bind(signer);
+            signer.send = (request, options = {}) => {
+                txnIds.push(options.txnId);
+                return send(request, options);
+            };
+            const rooms = new CygnusRooms({identity, signer});
+            await rooms.joinRoom(ROOM_ID);
+            const firstLeave = await rooms.leaveRoom(ROOM_ID);
+            const firstLeaveTxn = txnIds[txnIds.length - 1];
+            const sentAfterLeave = sent.length;
+            // retrying the same leave reuses its confirmed result
+            const retriedLeave = await rooms.leaveRoom(ROOM_ID);
+            assert.equal(txnIds[txnIds.length - 1], firstLeaveTxn);
+            assert.equal(retriedLeave.eventId, firstLeave.eventId);
+            assert.equal(sent.length, sentAfterLeave);
+            // a successful rejoin clears the leave, so the next leave gets a new transaction ID
+            await rooms.joinRoom(ROOM_ID);
+            await rooms.leaveRoom(ROOM_ID);
+            assert.notEqual(txnIds[txnIds.length - 1], firstLeaveTxn);
         },
         "a failed room setup exposes the room so it can be finished without another room": async assert => {
             const sent = [];

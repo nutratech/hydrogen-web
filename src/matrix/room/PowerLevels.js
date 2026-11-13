@@ -79,7 +79,10 @@ export class PowerLevels {
                 return userLevel;
             }
         } else if (this._createEvent) {
-            if (userId === this._createEvent.content?.creator) {
+            const isLegacyCreator = userId === this._createEvent.content?.creator;
+            const isCygnusCreator = !!this._createEvent.content?.creator_links &&
+                userId === this._createEvent.sender;
+            if (isLegacyCreator || isCygnusCreator) {
                 return 100;
             }
         }
@@ -148,6 +151,25 @@ export function tests() {
             assert.equal(pl1.canRedact, true);
             const pl2 = new PowerLevels({createEvent, ownUserId: bob, membership: "join"});
             assert.equal(pl2.canRedact, false);
+        },
+        "the Cygnus create sender is the room creator": assert => {
+            const cygnusCreateEvent = {
+                sender: alice,
+                content: {creator_links: {user: ["chain"]}},
+            };
+            const creator = new PowerLevels({
+                createEvent: cygnusCreateEvent, ownUserId: alice, membership: "join",
+            });
+            assert.equal(creator.getUserLevel(alice), 100);
+            assert.equal(creator.canRedact, true);
+            assert.equal(creator.canKickUser(bob, "join"), true);
+            assert.equal(creator.canBanUser(bob, "join"), true);
+            const member = new PowerLevels({
+                createEvent: cygnusCreateEvent, ownUserId: bob, membership: "join",
+            });
+            assert.equal(member.getUserLevel(bob), 0);
+            assert.equal(member.canRedact, false);
+            assert.equal(member.canKickUser(alice, "join"), false);
         },
         "redact own event": assert => {
             const pl = new PowerLevels({ownUserId: alice, membership: "join"});

@@ -14,6 +14,11 @@ export function signedEventKey(txnId) {
     return `cygnus.signed.${txnId}`;
 }
 
+/** Session-store key for a confirmed event retained for a resumable operation. */
+function confirmedEventKey(txnId) {
+    return `cygnus.confirmed.${txnId}`;
+}
+
 function floorKey(identity, roomId) {
     return JSON.stringify([identity.principal, identity.deviceId, roomId]);
 }
@@ -25,6 +30,26 @@ function same(a, b) {
     return anotherjson.stringify(a) === anotherjson.stringify(b);
 }
 
+function withoutUndefined(value) {
+    if (Array.isArray(value)) {
+        return value.map(withoutUndefined);
+    }
+    if (value && typeof value === "object") {
+        const result = {};
+        for (const [key, entry] of Object.entries(value)) {
+            if (entry !== undefined) {
+                result[key] = withoutUndefined(entry);
+            }
+        }
+        return result;
+    }
+    return value;
+}
+
+function sameRequest(a, b) {
+    return same(withoutUndefined(a), withoutUndefined(b));
+}
+
 /**
  * Sends in progress, keyed by principal, device and transaction ID, so
  * overlapping calls for the same identity and transaction await one draft
@@ -32,6 +57,9 @@ function same(a, b) {
  * @type {Map<string, Promise<{eventId: string, event: object}>>}
  */
 const inFlightSends = new Map();
+
+/** Room send queues, serialized through confirmation for each identity and room. */
+const roomSendQueues = new Map();
 
 /**
  * Check an assisted-mode draft (§9) against the request that produced it.
@@ -130,7 +158,8 @@ function checkCreateContent(content, requested, {identity, crypto}) {
  *
  * It keeps the device floor per principal, device and room: the last event `send_signed` confirmed.
  * Every later draft for that room must list it in `prev_events`, and the floor
- * moves only after a confirmation.
+ * moves only after a confirmation. Sends in one room are serialized through
+ * confirmation so a draft cannot race ahead of a newly advanced floor.
  *
  * A signed event is stored under its transaction ID before it is submitted.
  * A retry with the same transaction ID resends that exact event, which §9
@@ -149,17 +178,20 @@ export class CygnusEventSigner {
 
     /**
      * @param {{roomId?: string, type: string, stateKey?: string, content: object, via?: string[]}} request
-     * @param {{txnId?: string, log?: object}} [options] pass the caller's transaction ID
-     *     (e.g. a pending event's) so retries and remote echoes line up
+     * @param {{txnId?: string, log?: object, retainConfirmed?: boolean}} [options] pass the caller's transaction ID
+     *     (e.g. a pending event's) so retries and remote echoes line up; `retainConfirmed`
+     *     keeps the confirmed result for resumable multi-step operations
      * @returns {Promise<{eventId: string, event: object}>} the submitted event and its ID
      */
-    async send(request, {log, txnId = this._createTxnId()} = {}) {
+    async send(request, {log, txnId = this._createTxnId(), retainConfirmed = false} = {}) {
         const sendKey = JSON.stringify([this._identity.principal, this._identity.deviceId, txnId]);
         const ongoing = inFlightSends.get(sendKey);
         if (ongoing) {
             return ongoing;
         }
-        const run = this._send(request, {log, txnId}).finally(() => {
+        const roomKey = request.roomId ? floorKey(this._identity, request.roomId) : undefined;
+        const run = this._queueRoomSend(roomKey, txnId,
+            () => this._send(request, {log, txnId, retainConfirmed})).finally(() => {
             if (inFlightSends.get(sendKey) === run) {
                 inFlightSends.delete(sendKey);
             }
@@ -169,7 +201,49 @@ export class CygnusEventSigner {
     }
 
     /** Draft, sign and submit one request; `send` coalesces callers by transaction ID. */
-    async _send(request, {log, txnId}) {
+    async _queueRoomSend(roomKey, txnId, send) {
+        if (!roomKey) {
+            return send();
+        }
+        const queue = roomSendQueues.get(roomKey) ?? {tail: Promise.resolve(), pendingTxnId: undefined};
+        const run = queue.tail.catch(() => {}).then(async () => {
+            if (queue.pendingTxnId && queue.pendingTxnId !== txnId) {
+                throw new Error(`room has an unconfirmed signed event for transaction ${queue.pendingTxnId}; retry it before sending another event`);
+            }
+            try {
+                const result = await send();
+                if (queue.pendingTxnId === txnId) {
+                    queue.pendingTxnId = undefined;
+                }
+                return result;
+            } catch (err) {
+                if (await this._get(signedEventKey(txnId))) {
+                    queue.pendingTxnId = txnId;
+                }
+                throw err;
+            }
+        });
+        queue.tail = run;
+        roomSendQueues.set(roomKey, queue);
+        try {
+            return await run;
+        } finally {
+            if (!queue.pendingTxnId && queue.tail === run && roomSendQueues.get(roomKey) === queue) {
+                roomSendQueues.delete(roomKey);
+            }
+        }
+    }
+
+    async _send(request, {log, txnId, retainConfirmed}) {
+        if (retainConfirmed) {
+            const confirmed = await this._get(confirmedEventKey(txnId));
+            if (confirmed) {
+                if (!sameRequest(confirmed.request, request)) {
+                    throw new Error("transaction ID was already confirmed for a different event");
+                }
+                return {eventId: confirmed.eventId, event: confirmed.event};
+            }
+        }
         let signed = await this._get(signedEventKey(txnId));
         if (!signed) {
             signed = await this._draftAndSign(request, txnId, log);
@@ -195,7 +269,8 @@ export class CygnusEventSigner {
         }
         // `m.room.create` has no room yet; its event ID determines the room ID (§5.6).
         const floorRoomId = request.roomId ?? `!${computed.eventId.slice(1)}`;
-        await this._confirm(txnId, floorKey(this._identity, floorRoomId), computed.eventId);
+        await this._confirm(txnId, floorKey(this._identity, floorRoomId), computed.eventId,
+            retainConfirmed ? {eventId: computed.eventId, event: signed, request} : undefined);
         return {eventId: computed.eventId, event: signed};
     }
 
@@ -279,13 +354,49 @@ export class CygnusEventSigner {
         await txn.complete();
     }
 
-    /** Advance the room's floor and drop the stored signed event, in one transaction. */
-    async _confirm(txnId, key, eventId) {
+    /** Atomically retain a transaction ID for one lifecycle operation. */
+    async getOrCreateTxnId(key) {
+        const txn = await this._storage.readWriteTxn([this._storage.storeNames.session]);
+        try {
+            let txnId = await txn.session.get(key);
+            if (!txnId) {
+                txnId = this._createTxnId();
+                txn.session.set(key, txnId);
+            }
+            await txn.complete();
+            return txnId;
+        } catch (err) {
+            txn.abort();
+            throw err;
+        }
+    }
+
+    /** Clear an operation ID once the operation that supersedes it is confirmed. */
+    async clearTxnId(key) {
+        const txn = await this._storage.readWriteTxn([this._storage.storeNames.session]);
+        try {
+            const txnId = await txn.session.get(key);
+            txn.session.remove(key);
+            if (txnId) {
+                txn.session.remove(confirmedEventKey(txnId));
+            }
+        } catch (err) {
+            txn.abort();
+            throw err;
+        }
+        await txn.complete();
+    }
+
+    /** Advance the room's floor, drop the signed event and optionally retain its result. */
+    async _confirm(txnId, key, eventId, confirmed) {
         const txn = await this._storage.readWriteTxn([this._storage.storeNames.session]);
         try {
             const floors = await txn.session.get(FLOORS_SESSION_KEY) ?? {};
             txn.session.set(FLOORS_SESSION_KEY, {...floors, [key]: eventId});
             txn.session.remove(signedEventKey(txnId));
+            if (confirmed) {
+                txn.session.set(confirmedEventKey(txnId), confirmed);
+            }
         } catch (err) {
             txn.abort();
             throw err;
