@@ -23,6 +23,11 @@ interface ISessionInfo {
      * can also be restored.
      */
     isReadOnly: boolean;
+    /**
+     * A workspace's secondary connection: listed and opened only through
+     * its workspace (see WorkspaceStorage).
+     */
+    hidden?: boolean;
 }
 
 // todo: this should probably be in platform/types?
@@ -30,6 +35,7 @@ interface ISessionInfoStorage {
     getAll(): Promise<ISessionInfo[]>;
     updateLastUsed(id: string, timestamp: number): Promise<void>;
     updateAccessToken(id: string, token: string): Promise<void>;
+    update(id: string, patch: Partial<Omit<ISessionInfo, "id">>): Promise<void>;
     get(id: string): Promise<ISessionInfo | undefined>;
     add(sessionInfo: ISessionInfo): Promise<void>;
     delete(sessionId: string): Promise<void>;
@@ -43,18 +49,22 @@ export class SessionInfoStorage implements ISessionInfoStorage {
     }
 
     getAll(): Promise<ISessionInfo[]> {
+        return Promise.resolve(this._getAllSync());
+    }
+
+    private _getAllSync(): ISessionInfo[] {
         const sessionsJson = localStorage.getItem(this._name);
         if (sessionsJson) {
             const sessions = JSON.parse(sessionsJson);
             if (Array.isArray(sessions)) {
-                return Promise.resolve(sessions);
+                return sessions;
             }
         }
-        return Promise.resolve([]);
+        return [];
     }
 
     async updateAccessToken(id: string, accessToken: string): Promise<void> {
-        const sessions = await this.getAll();
+        const sessions = this._getAllSync();
         const session = sessions.find(session => session.id === id);
         if (!session) {
             throw Error('No session found');
@@ -63,8 +73,19 @@ export class SessionInfoStorage implements ISessionInfoStorage {
         localStorage.setItem(this._name, JSON.stringify(sessions));
     }
 
+    /** Merge `patch` into a session's info, e.g. to hide a workspace's secondary connection. */
+    async update(id: string, patch: Partial<Omit<ISessionInfo, "id">>): Promise<void> {
+        const sessions = this._getAllSync();
+        const session = sessions.find(session => session.id === id);
+        if (!session) {
+            throw Error('No session found');
+        }
+        Object.assign(session, patch, {id});
+        localStorage.setItem(this._name, JSON.stringify(sessions));
+    }
+
     async updateLastUsed(id: string, timestamp: number): Promise<void> {
-        const sessions = await this.getAll();
+        const sessions = this._getAllSync();
         const session = sessions.find(session => session.id === id);
         if (session) {
             session.lastUsed = timestamp;
@@ -80,13 +101,13 @@ export class SessionInfoStorage implements ISessionInfoStorage {
     }
 
     async add(sessionInfo: ISessionInfo): Promise<void> {
-        const sessions = await this.getAll();
+        const sessions = this._getAllSync();
         sessions.push(sessionInfo);
         localStorage.setItem(this._name, JSON.stringify(sessions));
     }
 
     async delete(sessionId: string): Promise<void> {
-        let sessions = await this.getAll();
+        let sessions = this._getAllSync();
         sessions = sessions.filter(s => s.id !== sessionId);
         localStorage.setItem(this._name, JSON.stringify(sessions));
     }

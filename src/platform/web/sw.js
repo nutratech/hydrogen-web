@@ -16,7 +16,8 @@ const HASHED_CACHED_ON_REQUEST_ASSETS = DEFINE_HASHED_CACHED_ON_REQUEST_ASSETS;
 
 const unhashedCacheName = `hydrogen-assets-${DEFINE_GLOBAL_HASH}`;
 const hashedCacheName = `hydrogen-assets`;
-const mediaThumbnailCacheName = `hydrogen-media-thumbnails-v2`;
+// Bump when media request URLs change, so old cache keys are discarded.
+const mediaThumbnailCacheName = `hydrogen-media-thumbnails-v4`;
 
 self.addEventListener("install", function (e) {
     e.waitUntil(
@@ -108,11 +109,19 @@ async function handleRequest({ request, clientId }) {
 
         // rewrite / to /index.html so it hits the cache
         const url = new URL(request.url);
+        const requestedSessionId = url.searchParams.get("_hydrogen_session_id");
         if (
             url.origin === baseURL.origin &&
             url.pathname === baseURL.pathname
         ) {
             request = new Request(new URL("index.html", baseURL.href));
+        }
+        const cacheRequest = request;
+        let networkRequest = request;
+        if (requestedSessionId) {
+            const networkUrl = new URL(request.url);
+            networkUrl.searchParams.delete("_hydrogen_session_id");
+            networkRequest = new Request(networkUrl.href, request);
         }
 
         // Add access token for authenticated media endpoints
@@ -120,30 +129,29 @@ async function handleRequest({ request, clientId }) {
             url.pathname.indexOf("/_matrix/client/v1/media") === 0;
         if (pathNameStartsWithMediaPrefix) {
             const client = await self.clients.get(clientId);
-            const { accessToken, homeserver } = await sendAndWaitForReply(
+            const authInfo = await sendAndWaitForReply(
                 client,
                 "getAuthInfo",
                 {}
             );
-            if (!accessToken) {
+            // the visible session's auth first, then a workspace's hidden
+            // connections; use the one whose homeserver this request goes to
+            const candidates = [authInfo, ...(authInfo?.connections ?? [])]
+                .filter(auth => auth?.accessToken && auth?.homeserver);
+            if (candidates.length === 0) {
                 throw new Error(
-                    "Token returned from getAuthInfo message in sw.js is null!"
+                    "getAuthInfo message in sw.js returned no access token and homeserver!"
                 );
             }
-            if (!homeserver) {
-                throw new Error(
-                    "homeserver returned from getAuthInfo message in sw.js is null!"
-                );
-            }
-            // Is this request actually going to the homeserver?
-            const isRequestForHomeserver =
-                new URL(homeserver).origin === url.origin;
-            if (isRequestForHomeserver) {
-                // Only add the access-token if we know that this request
-                // is going to the homeserver.
-                const headers = new Headers(request.headers);
-                headers.set("authorization", `Bearer ${accessToken}`);
-                request = new Request(request, {
+            // Only add the access-token if we know that this request
+            // is going to that homeserver.
+            const auth = requestedSessionId
+                ? candidates.find(candidate => candidate.sessionId === requestedSessionId)
+                : candidates.find(({ homeserver }) => new URL(homeserver).origin === url.origin);
+            if (auth && new URL(auth.homeserver).origin === url.origin) {
+                const headers = new Headers(networkRequest.headers);
+                headers.set("authorization", `Bearer ${auth.accessToken}`);
+                networkRequest = new Request(networkRequest, {
                     mode: "cors",
                     credentials: "omit",
                     headers,
@@ -151,22 +159,22 @@ async function handleRequest({ request, clientId }) {
             }
         }
 
-        let response = await readCache(request);
+        let response = await readCache(cacheRequest);
         if (!response) {
             // use cors so the resource in the cache isn't opaque and uses up to 7mb
             // https://developers.google.com/web/tools/chrome-devtools/progressive-web-apps?utm_source=devtools#opaque-responses
             if (isCacheableThumbnail(url)) {
-                response = await fetch(request, {
+                response = await fetch(networkRequest, {
                     signal: pendingFetchAbortController.signal,
                     mode: "cors",
                     credentials: "omit",
                 });
             } else {
-                response = await fetch(request, {
+                response = await fetch(networkRequest, {
                     signal: pendingFetchAbortController.signal,
                 });
             }
-            await updateCache(request, response);
+            await updateCache(cacheRequest, response);
         }
         return response;
     } catch (err) {

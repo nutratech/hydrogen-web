@@ -28,6 +28,8 @@ export enum StoreNames {
     calls = "calls",
     crossSigningKeys = "crossSigningKeys",
     sharedSecrets = "sharedSecrets",
+    dmlsGroups = "dmlsGroups",
+    dmlsKeyPackages = "dmlsKeyPackages",
 }
 
 export const STORE_NAMES: Readonly<StoreNames[]> = Object.values(StoreNames);

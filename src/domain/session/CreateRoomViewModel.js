@@ -26,11 +26,34 @@ export class CreateRoomViewModel extends ViewModel {
         this._avatarFileName = undefined;
         this._avatarInfo = undefined;
         this._closeUrl = this.urlRouter.urlUntilSegment("session");
+        this._isCygnus = false;
+        this._isCreating = false;
+        this._error = undefined;
+        this._cygnusRoomRecovery = undefined;
+        const cygnus = session.cygnus;
+        if (cygnus) {
+            this.track(cygnus.identity.subscribe(() => this.emitChange("canUseCygnus")));
+            cygnus.load().then(() => this.emitChange("canUseCygnus"), () => {});
+        }
+    }
+
+    /** True when the user can create an MSC00FC room: the feature is on, the server supports it and they have a principal. */
+    get canUseCygnus() {
+        const cygnus = this._session.cygnus;
+        return !!cygnus?.isSupported && !!cygnus.identity.get();
+    }
+    get isCygnus() { return this._isCygnus && this.canUseCygnus; }
+    get isCreating() { return this._isCreating; }
+    get error() { return this._error; }
+
+    setCygnus(isCygnus) {
+        this._isCygnus = isCygnus;
+        this.emitChange("isCygnus");
     }
 
     get isPublic() { return this._isPublic; }
     get isEncrypted() { return this._isEncrypted; }
-    get canCreate() { return !!this._name; }
+    get canCreate() { return !!this._name && !this._isCreating; }
     avatarUrl() { return this._avatarScaledBlob.url; }
     get avatarTitle() { return this._name; }
     get avatarLetter() { return ""; }
@@ -74,6 +97,12 @@ export class CreateRoomViewModel extends ViewModel {
     }
 
     create() {
+        if (this._cygnusRoomRecovery) {
+            return this._createCygnusRoom();
+        }
+        if (this.isCygnus) {
+            return this._createCygnusRoom();
+        }
         let avatar;
         if (this._avatarScaledBlob) {
             avatar = {
@@ -92,6 +121,39 @@ export class CreateRoomViewModel extends ViewModel {
             avatar,
         });
         this.navigation.push("room", roomBeingCreated.id);
+    }
+
+    /**
+     * MSC00FC rooms are built from device-signed events, so they skip the
+     * regular createRoom flow (and its avatar, alias and encryption options).
+     */
+    async _createCygnusRoom() {
+        this._isCreating = true;
+        this._error = undefined;
+        this.emitChange("isCreating");
+        try {
+            const roomId = await this.logger.run("cygnus create room", log => {
+                if (this._cygnusRoomRecovery) {
+                    const {roomId, roomSetup} = this._cygnusRoomRecovery;
+                    return this._session.cygnus.finishRoom(roomId, roomSetup, log);
+                }
+                return this._session.cygnus.createRoom({
+                    name: this._name,
+                    topic: this._topic || undefined,
+                    isPublic: this._isPublic,
+                }, log);
+            });
+            this._cygnusRoomRecovery = undefined;
+            this.navigation.push("room", roomId);
+        } catch (err) {
+            this._error = err.message;
+            if (err.roomId && err.roomSetup) {
+                this._cygnusRoomRecovery = {roomId: err.roomId, roomSetup: err.roomSetup};
+            }
+        } finally {
+            this._isCreating = false;
+            this.emitChange("isCreating");
+        }
     }
 
     async selectAvatar() {

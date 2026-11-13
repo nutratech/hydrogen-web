@@ -35,6 +35,33 @@ export class PowerLevels {
         return this._myLevel >= this._getActionLevel("redact");
     }
 
+    get canInvite() {
+        return this._myLevel >= this._getActionLevel("invite");
+    }
+
+    get canKick() {
+        return this._myLevel >= this._getActionLevel("kick");
+    }
+
+    get canBan() {
+        return this._myLevel >= this._getActionLevel("ban");
+    }
+
+    /** Kick needs a higher level and only makes sense while the member is present and not banned. */
+    canKickUser(userId, membership) {
+        return this.canKick && membership !== "leave" && membership !== "ban" &&
+            this._hasHigherLevelThan(userId);
+    }
+
+    /** Ban needs a higher level, but is also allowed against someone who already left. */
+    canBanUser(userId, membership) {
+        return this.canBan && membership !== "ban" && this._hasHigherLevelThan(userId);
+    }
+
+    _hasHigherLevelThan(userId) {
+        return this.getUserLevel(userId) < this._myLevel;
+    }
+
     get _myLevel() {
         if (this._membership !== "join") {
             return Number.MIN_SAFE_INTEGER;
@@ -52,7 +79,10 @@ export class PowerLevels {
                 return userLevel;
             }
         } else if (this._createEvent) {
-            if (userId === this._createEvent.content?.creator) {
+            const isLegacyCreator = userId === this._createEvent.content?.creator;
+            const isCygnusCreator = !!this._createEvent.content?.creator_links &&
+                userId === this._createEvent.sender;
+            if (isLegacyCreator || isCygnusCreator) {
                 return 100;
             }
         }
@@ -122,6 +152,25 @@ export function tests() {
             const pl2 = new PowerLevels({createEvent, ownUserId: bob, membership: "join"});
             assert.equal(pl2.canRedact, false);
         },
+        "the Cygnus create sender is the room creator": assert => {
+            const cygnusCreateEvent = {
+                sender: alice,
+                content: {creator_links: {user: ["chain"]}},
+            };
+            const creator = new PowerLevels({
+                createEvent: cygnusCreateEvent, ownUserId: alice, membership: "join",
+            });
+            assert.equal(creator.getUserLevel(alice), 100);
+            assert.equal(creator.canRedact, true);
+            assert.equal(creator.canKickUser(bob, "join"), true);
+            assert.equal(creator.canBanUser(bob, "join"), true);
+            const member = new PowerLevels({
+                createEvent: cygnusCreateEvent, ownUserId: bob, membership: "join",
+            });
+            assert.equal(member.getUserLevel(bob), 0);
+            assert.equal(member.canRedact, false);
+            assert.equal(member.canKickUser(alice, "join"), false);
+        },
         "redact own event": assert => {
             const pl = new PowerLevels({ownUserId: alice, membership: "join"});
             assert.equal(pl.canRedactFromSender(alice), true);
@@ -150,6 +199,20 @@ export function tests() {
             assert.equal(pl.canRedact, false);
             assert.equal(pl.canRedactFromSender(alice), false);
             assert.equal(pl.canSendType("m.room.message"), false);
+        },
+        "kick and ban require a strictly higher level": assert => {
+            const event = {content: {users: {[alice]: 50, [bob]: 25, [charly]: 50}}};
+            const pl = new PowerLevels({powerLevelEvent: event, ownUserId: alice, membership: "join"});
+            assert.equal(pl.canKickUser(bob, "join"), true);
+            assert.equal(pl.canKickUser(charly, "join"), false);
+            assert.equal(pl.canBanUser(bob, "join"), true);
+            assert.equal(pl.canBanUser(charly, "join"), false);
+            assert.equal(pl.canBanUser(alice, "join"), false);
+            assert.equal(pl.canKickUser(bob, "leave"), false);
+            assert.equal(pl.canKickUser(bob, "ban"), false);
+            assert.equal(pl.canBanUser(bob, "ban"), false);
+            // a preemptive ban is allowed against someone who already left
+            assert.equal(pl.canBanUser(bob, "leave"), true);
         },
     }
 }

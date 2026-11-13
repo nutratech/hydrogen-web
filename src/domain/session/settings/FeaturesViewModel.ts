@@ -27,6 +27,11 @@ export class FeaturesViewModel extends ViewModel {
                 description: this.i18n`Allows verifying the identity of people you chat with. This feature is still evolving constantly, expect things to break.`,
                 feature: FeatureFlag.CrossSigning
             })),
+            new FeatureViewModel(this.childOptions({
+                name: this.i18n`Portable identity (Cygnus)`,
+                description: this.i18n`Experimental MSC00FC support: a portable user principal, Cygnus rooms and key rotation. Needs cross-signing and a homeserver that advertises tk.nutra.cygnus.`,
+                feature: FeatureFlag.Cygnus
+            })),
         ];
     }
 }

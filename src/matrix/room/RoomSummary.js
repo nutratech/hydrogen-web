@@ -9,6 +9,10 @@ Please see LICENSE files in the repository root for full details.
 import {MEGOLM_ALGORITHM} from "../e2ee/common";
 import {iterateResponseStateEvents} from "./common";
 
+function isOwnSender(ownUserIds, userId) {
+    return Array.isArray(ownUserIds) ? ownUserIds.includes(userId) : ownUserIds === userId;
+}
+
 function applyTimelineEntries(data, timelineEntries, isInitialSync, canMarkUnread, ownUserId) {
     if (timelineEntries.length) {
         data = timelineEntries.reduce((data, entry) => {
@@ -74,6 +78,7 @@ export function processStateEvent(data, event, ownUserId) {
     if (event.type === "m.room.create") {
         data = data.cloneIfNeeded();
         data.lastMessageTimestamp = event.origin_server_ts;
+        data.roomVersion = event.content?.room_version ?? null;
     } else if (event.type === "m.room.encryption") {
         const algorithm = event.content?.algorithm;
         if (!data.encryption && algorithm === MEGOLM_ALGORITHM) {
@@ -100,9 +105,9 @@ export function processStateEvent(data, event, ownUserId) {
         const content = event.content;
         if (content.is_direct === true && content.membership === "invite" && !data.isDirectMessage) {
             let other;
-            if (event.sender === ownUserId) {
+            if (isOwnSender(ownUserId, event.sender)) {
                 other = event.state_key;
-            } else if (event.state_key === ownUserId) {
+            } else if (isOwnSender(ownUserId, event.state_key)) {
                 other = event.sender;
             }
             if (other) {
@@ -125,7 +130,7 @@ function processTimelineEvent(data, eventEntry, isInitialSync, canMarkUnread, ow
             data = data.cloneIfNeeded();
             data.lastMessageTimestamp = eventEntry.timestamp;
         }
-        if (!isInitialSync && eventEntry.sender !== ownUserId && canMarkUnread) {
+        if (!isInitialSync && !isOwnSender(ownUserId, eventEntry.sender) && canMarkUnread) {
             data = data.cloneIfNeeded();
             data.isUnread = true;
         }
@@ -175,6 +180,7 @@ export class SummaryData {
         this.tags = copy ? copy.tags : null;
         this.isDirectMessage = copy ? copy.isDirectMessage : false;
         this.dmUserId = copy ? copy.dmUserId : null;
+        this.roomVersion = copy ? (copy.roomVersion ?? null) : null;
         this.cloned = copy ? true : false;
     }
 

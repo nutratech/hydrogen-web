@@ -17,6 +17,8 @@ import {AttachmentUpload} from "./AttachmentUpload.js";
 import {DecryptionSource} from "../e2ee/common";
 import {iterateResponseStateEvents} from "./common";
 import {PowerLevels, EVENT_TYPE as POWERLEVELS_EVENT_TYPE } from "./PowerLevels.js";
+import {isCygnusRoomVersion, isPrincipal} from "../cygnus/constants.js";
+import {DmlsService} from "../cygnus/DmlsService.js";
 
 const EVENT_ENCRYPTED_TYPE = "m.room.encrypted";
 
@@ -29,15 +31,54 @@ export class Room extends BaseRoom {
         const relationWriter = new RelationWriter({
             roomId: this.id,
             fragmentIdComparer: this._fragmentIdComparer,
-            ownUserId: this._user.id
+            getOwnUserIds: () => this.ownUserIds
         });
         this._syncWriter = new SyncWriter({
             roomId: this.id,
             fragmentIdComparer: this._fragmentIdComparer,
             relationWriter,
-            memberWriter: new MemberWriter(this.id)
+            memberWriter: new MemberWriter(this.id, () => this.isCygnus)
         });
-        this._sendQueue = new SendQueue({roomId: this.id, storage: this._storage, hsApi: this._hsApi, pendingEvents});
+        const {getCygnus} = options;
+        this._getCygnus = getCygnus;
+        /** Last capability classification seen in the create event. */
+        this._dmlsCapability = undefined;
+        this._syncOwnUserIds = null;
+        this._sendQueue = new SendQueue({
+            roomId: this.id, storage: this._storage, hsApi: this._hsApi, pendingEvents,
+            // MSC00FC rooms: the device signs each event and submits it through `send_signed`
+            getSignedSender: () => {
+                const cygnus = getCygnus?.();
+                if (!this.isCygnus) {
+                    return undefined;
+                }
+                if (!cygnus) {
+                    // never fall back to an unsigned send in a Cygnus room
+                    return () => Promise.reject(new Error("this is a Cygnus room; enable the Cygnus feature to send"));
+                }
+                return (type, content, txnId, log) => cygnus.sendRoomEvent(this.id, type, content, txnId, log);
+            },
+        });
+    }
+
+    get ownUserIds() {
+        return this._syncOwnUserIds || super.ownUserIds;
+    }
+
+    /** How this room's create content classifies DMLS, once seen. */
+    get dmlsCapability() {
+        return this._dmlsCapability;
+    }
+
+    _resolveOwnUserIds(roomResponse) {
+        let isCygnus = this.isCygnus;
+        iterateResponseStateEvents(roomResponse, event => {
+            if (event.type === "m.room.create" && isCygnusRoomVersion(event.content?.room_version)) {
+                isCygnus = true;
+            }
+        });
+        const principal = isCygnus ? this._getCygnus?.()?.identity.get()?.principal : undefined;
+        return principal ? [this._user.id, principal] : [this._user.id];
     }
 
     _setEncryption(roomEncryption) {
@@ -48,15 +89,35 @@ export class Room extends BaseRoom {
         return false;
     }
 
-    async prepareSync(roomResponse, membership, newKeys, txn, log) {
+    async prepareSync(...args) {
+        try {
+            return await this._prepareSync(...args);
+        } catch (err) {
+            // a failed prepare must not leave this sync's own IDs behind
+            this._syncOwnUserIds = null;
+            throw err;
+        }
+    }
+
+    async _prepareSync(roomResponse, membership, newKeys, txn, log) {
+        this._syncOwnUserIds = this._resolveOwnUserIds(roomResponse);
         log.set("id", this.id);
         if (newKeys) {
             log.set("newKeys", newKeys.length);
         }
-        let summaryChanges = this._summary.data.applySyncResponse(roomResponse, membership, this._user.id);
+        let summaryChanges = this._summary.data.applySyncResponse(roomResponse, membership, this.ownUserIds);
+        const capability = DmlsService.capabilityFromRoomResponse(roomResponse);
+        if (capability) {
+            this._dmlsCapability = capability;
+        }
+        // A create content with a DMLS block owns encryption for this room,
+        // including a version this client does not implement (never Megolm).
+        const dmlsSelected = !!this._dmlsCapability &&
+            this._dmlsCapability.reason !== "not_cygnus" &&
+            this._dmlsCapability.reason !== "absent";
         let roomEncryption = this._roomEncryption;
         // encryption is enabled in this sync
-        if (!roomEncryption && summaryChanges.encryption) {
+        if (!roomEncryption && summaryChanges.encryption && !dmlsSelected) {
             log.set("enableEncryption", true);
             roomEncryption = this._createRoomEncryption(this, summaryChanges.encryption);
         }
@@ -106,7 +167,17 @@ export class Room extends BaseRoom {
     }
 
     /** @package */
-    async writeSync(roomResponse, isInitialSync, {summaryChanges, decryptChanges, roomEncryption, retryEntries}, txn, log) {
+    async writeSync(...args) {
+        try {
+            return await this._writeSync(...args);
+        } catch (err) {
+            // `afterSync` will not run for a failed write; do not keep this sync's own IDs
+            this._syncOwnUserIds = null;
+            throw err;
+        }
+    }
+
+    async _writeSync(roomResponse, isInitialSync, {summaryChanges, decryptChanges, roomEncryption, retryEntries}, txn, log) {
         log.set("id", this.id);
         const isRejoin = summaryChanges.isNewJoin(this._summary.data);
         if (isRejoin) {
@@ -143,7 +214,7 @@ export class Room extends BaseRoom {
         const allEntries = newEntries.concat(updatedEntries);
         // also apply (decrypted) timeline entries to the summary changes
         summaryChanges = summaryChanges.applyTimelineEntries(
-            allEntries, isInitialSync, !this._isTimelineOpen, this._user.id);
+            allEntries, isInitialSync, !this._isTimelineOpen, this.ownUserIds);
         
         // if we've have left the room, remove the summary
         if (summaryChanges.membership !== "join") {
@@ -196,6 +267,14 @@ export class Room extends BaseRoom {
      * No storage or network operations should be done here.
      */
     afterSync(changes, log) {
+        try {
+            this._afterSync(changes, log);
+        } finally {
+            this._syncOwnUserIds = null;
+        }
+    }
+
+    _afterSync(changes, log) {
         const {
             summaryChanges, newEntries, updatedEntries, newLiveKey,
             removedPendingEvents, memberChanges, powerLevelsEvent,
@@ -206,6 +285,14 @@ export class Room extends BaseRoom {
         this._setEncryption(roomEncryption);
         if (this._roomEncryption) {
             this._roomEncryption.afterSync(encryptionChanges);
+        }
+        const dmls = this._getCygnus?.()?.dmls;
+        if (dmls && roomResponse?.timeline?.events?.length) {
+            // Apply/merge/reboot/external-commit events are protocol traffic.
+            // Persist their state after the sync transaction commits; a failed
+            // event is retried by the next sync.
+            dmls.enqueueRoomEvents(this.id, roomResponse.timeline.events, log)
+                .catch(err => log.catch(err));
         }
         if (memberChanges.size) {
             if (this._changedMembersDuringSync) {
@@ -222,7 +309,7 @@ export class Room extends BaseRoom {
             }
             if (this._timeline) {
                 for (const [userId, memberChange] of memberChanges.entries()) {
-                    if (userId === this._user.id) {
+                    if (this.ownUserIds.includes(userId)) {
                         this._timeline.updateOwnMember(memberChange.member);
                         break;
                     }
@@ -289,7 +376,7 @@ export class Room extends BaseRoom {
         if (this._powerLevels) {
             const newPowerLevels = new PowerLevels({
                 powerLevelEvent,
-                ownUserId: this._user.id,
+                ownUserId: this.ownRoomUserId,
                 membership: this.membership,
             });
             this._powerLevels.set(newPowerLevels);
@@ -464,15 +551,90 @@ export class Room extends BaseRoom {
     leave(log = null) {
         return this._platform.logger.wrapOrRun(log, "leave room", async log => {
             log.set("id", this.id);
+            if (this.isCygnus) {
+                const cygnus = this._getCygnus?.();
+                if (!cygnus) throw new Error("Cygnus is unavailable for this room");
+                await cygnus.leaveRoom(this.id, log);
+                return;
+            }
             await this._hsApi.leave(this.id, {log}).response();
         });
     }
 
-    async inviteUser(userId, reason) {
+    /**
+     * Send a state event in this room. Cygnus rooms route it through the
+     * device-signed `send_signed` path instead of the plain `/state` endpoint.
+     */
+    sendStateEvent(type, stateKey, content, log = null, txnId) {
+        return this._platform.logger.wrapOrRun(log, "sendState", async log => {
+            log.set("id", this.id);
+            log.set("type", type);
+            if (this.isCygnus) {
+                const cygnus = this._getCygnus?.();
+                if (!cygnus) throw new Error("Cygnus is unavailable for this room");
+                return cygnus.sendStateEvent(this.id, type, content, stateKey, log, txnId);
+            }
+            const response = await this._hsApi.sendState(this.id, type, stateKey, content, {log}).response();
+            return response.event_id;
+        });
+    }
+
+    setName(name, log = null, txnId) {
+        return this.sendStateEvent("m.room.name", "", {name}, log, txnId);
+    }
+
+    setTopic(topic, log = null, txnId) {
+        return this.sendStateEvent("m.room.topic", "", {topic}, log, txnId);
+    }
+
+    setJoinRule(joinRule, log = null, txnId) {
+        return this.sendStateEvent("m.room.join_rules", "", {join_rule: joinRule}, log, txnId);
+    }
+
+    setPowerLevels(content, log = null, txnId) {
+        return this.sendStateEvent("m.room.power_levels", "", content, log, txnId);
+    }
+
+    async inviteUser(userId, reason, log = null, txnId) {
         if (!userId) {
             throw new Error("userId is null/undefined");
         }
-        await this._hsApi.invite(this.id, userId, reason).response();
+        if (this.isCygnus) {
+            const cygnus = this._getCygnus?.();
+            if (!cygnus) throw new Error("Cygnus is unavailable for this room");
+            const principal = isPrincipal(userId) ? userId : await cygnus.lookupPrincipal(userId, log);
+            return cygnus.sendMembershipEvent(this.id, principal, "invite", reason, log, txnId);
+        }
+        await this._hsApi.invite(this.id, userId, reason, {log}).response();
+    }
+
+    async kickUser(userId, reason, log = null, txnId) {
+        return this._changeOtherMembership("kick", userId, reason, log, txnId);
+    }
+
+    async banUser(userId, reason, log = null, txnId) {
+        return this._changeOtherMembership("ban", userId, reason, log, txnId);
+    }
+
+    async _changeOtherMembership(membership, userId, reason, log, txnId) {
+        if (!userId) {
+            throw new Error("userId is null/undefined");
+        }
+        // A kick is an ordinary leave event sent by someone else; "kick" is not
+        // a Matrix membership value. Normalise once, before either send path.
+        const eventMembership = membership === "kick" ? "leave" : membership;
+        if (this.isCygnus) {
+            const cygnus = this._getCygnus?.();
+            if (!cygnus) throw new Error("Cygnus is unavailable for this room");
+            const principal = isPrincipal(userId) ? userId : await cygnus.lookupPrincipal(userId, log);
+            return cygnus.sendMembershipEvent(this.id, principal, eventMembership, reason, log, txnId);
+        }
+        const content = {membership: eventMembership};
+        if (reason) {
+            content.reason = reason;
+        }
+        const response = await this._hsApi.sendState(this.id, "m.room.member", userId, content, {log}).response();
+        return response.event_id;
     }
 
     /* called by BaseRoom to pass pendingEvents when opening the timeline */

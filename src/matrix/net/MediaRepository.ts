@@ -20,18 +20,21 @@ type ServerVersions = VersionResponse["versions"];
 
 type Params = {
     homeserver: string;
+    sessionId?: string;
     platform: Platform;
     serverVersions: ServerVersions;
 };
 
 export class MediaRepository {
     private readonly homeserver: string;
+    private readonly sessionId?: string;
     private readonly platform: Platform;
     // Depends on whether the server supports authenticated media
     private mediaUrlPart: string;
 
     constructor(params: Params) {
         this.homeserver = params.homeserver;
+        this.sessionId = params.sessionId;
         this.platform = params.platform;
         this.generateMediaUrl(params.serverVersions);
     }
@@ -65,7 +68,7 @@ export class MediaRepository {
             }/thumbnail/${encodeURIComponent(serverName)}/${encodeURIComponent(
                 mediaId
             )}`;
-            return (
+            const mediaUrl = (
                 httpUrl +
                 "?" +
                 encodeQueryParams({
@@ -74,6 +77,7 @@ export class MediaRepository {
                     method,
                 })
             );
+            return this.withSessionId(mediaUrl);
         }
         return undefined;
     }
@@ -82,13 +86,21 @@ export class MediaRepository {
         const parts = this.parseMxcUrl(url);
         if (parts) {
             const [serverName, mediaId] = parts;
-            return `${this.homeserver}/${
+            return this.withSessionId(`${this.homeserver}/${
                 this.mediaUrlPart
             }/download/${encodeURIComponent(serverName)}/${encodeURIComponent(
                 mediaId
-            )}`;
+            )}`);
         }
         return undefined;
+    }
+
+    private withSessionId(url: string): string {
+        if (!this.sessionId || !url.includes("/_matrix/client/v1/media/")) {
+            return url;
+        }
+        const separator = url.includes("?") ? "&" : "?";
+        return `${url}${separator}_hydrogen_session_id=${encodeURIComponent(this.sessionId)}`;
     }
 
     private parseMxcUrl(url: string): string[] | undefined {
@@ -167,22 +179,32 @@ export function tests() {
             );
         },
 
-        "Uses correct endpoint when server does not supports authenticated media":
+        "does not add a session selector to legacy media URLs":
             (assert) => {
                 const homeserver = "matrix.org";
                 const platform = {};
-                const serverVersions = ["v1.1", "v1.11", "v1.10"];
+                const serverVersions = ["v1.1", "v1.10"];
                 const mediaRepository = new MediaRepository({
                     homeserver,
+                    sessionId: "session-1",
                     platform,
                     serverVersions,
                 });
 
                 const mxcUrl = "mxc://matrix.org/foobartest";
-                assert.match(
-                    mediaRepository.mxcUrl(mxcUrl),
-                    /_matrix\/client\/v1\/media/
-                );
+                assert.match(mediaRepository.mxcUrl(mxcUrl), /_matrix\/media\/v3/);
+                assert.doesNotMatch(mediaRepository.mxcUrl(mxcUrl), /_hydrogen_session_id/);
+            },
+
+        "selects the owning session for authenticated media URLs": assert => {
+            const mediaRepository = new MediaRepository({
+                homeserver: "https://matrix.org",
+                sessionId: "destination/session",
+                platform: {},
+                serverVersions: ["v1.11"],
+            });
+            assert.match(mediaRepository.mxcUrl("mxc://matrix.org/file"), /_hydrogen_session_id=destination%2Fsession/);
+            assert.match(mediaRepository.mxcUrlThumbnail("mxc://matrix.org/file", 50, 50, "scale"), /_hydrogen_session_id=destination%2Fsession/);
             },
     };
 }

@@ -30,6 +30,11 @@ export class RoomViewModelObservable extends ObservableValue {
     constructor(sessionViewModel, roomIdOrLocalId) {
         super(null);
         this._statusSubscription = null;
+        this._routerSubscription = null;
+        this._routedSession = undefined;
+        this._routeGeneration = 0;
+        this._statusGeneration = 0;
+        this._disposed = false;
         this._sessionViewModel = sessionViewModel;
         this.id = roomIdOrLocalId;
     }
@@ -41,22 +46,78 @@ export class RoomViewModelObservable extends ObservableValue {
     are called in that case.
     */
     async initialize() {
-        const {session} = this._sessionViewModel._client;
+        // a connection coming or going, or the room changing owner, can change
+        // which session this room is shown from
+        this._routerSubscription = this._sessionViewModel.roomRouter.subscribeChanges(() => this._reroute());
+        await this._route();
+    }
+
+    async _route() {
+        const generation = ++this._routeGeneration;
+        const session = this._session();
+        this._routedSession = session;
+        if (!session) {
+            // the owning connection is unavailable: fail closed rather than show
+            // another connection's copy of the room, and say so
+            this.set(this._sessionViewModel._createUnavailableRoomViewModel(this.id));
+            return;
+        }
         const statusObservable = await session.observeRoomStatus(this.id);
-        this.set(await this._statusToViewModel(statusObservable.get()));
-        this._statusSubscription = statusObservable.subscribe(async status => {
-            // first dispose existing VM, if any
-            this.get()?.dispose();
-            this.set(await this._statusToViewModel(status));
+        if (generation !== this._routeGeneration || this._disposed) {
+            // rerouted (or disposed) while waiting
+            return;
+        }
+        const viewModel = await this._statusToViewModel(statusObservable.get());
+        if (generation !== this._routeGeneration || this._disposed) {
+            viewModel?.dispose();
+            return;
+        }
+        this.set(viewModel);
+        this._statusSubscription = statusObservable.subscribe(status => {
+            this._updateStatus(status, session, generation);
         });
+    }
+
+    async _updateStatus(status, session, generation) {
+        // a later status update supersedes this one even if it resolves first
+        const statusGeneration = ++this._statusGeneration;
+        const viewModel = await this._statusToViewModel(status);
+        if (generation !== this._routeGeneration || statusGeneration !== this._statusGeneration ||
+            this._disposed || this._session() !== session) {
+            viewModel?.dispose();
+            return;
+        }
+        this.get()?.dispose();
+        this.set(viewModel);
+    }
+
+    _reroute() {
+        if (this._disposed || this._session() === this._routedSession) {
+            return;
+        }
+        if (this._statusSubscription) {
+            this._statusSubscription = this._statusSubscription();
+            this._statusSubscription = null;
+        }
+        this.get()?.dispose();
+        this.set(null);
+        this._route();
+    }
+
+    /** The session for this ID: the one creating it (local IDs), else the room's owner. */
+    _session() {
+        const router = this._sessionViewModel.roomRouter;
+        return router.sessionForLocalId(this.id) ?? router.sessionForRoom(this.id);
     }
 
     async _statusToViewModel(status) {
         if (status & RoomStatus.Replaced) {
             if (status & RoomStatus.BeingCreated) {
-                const {session} = this._sessionViewModel._client;
-                const roomBeingCreated = session.roomsBeingCreated.get(this.id);
-                this._sessionViewModel.notifyRoomReplaced(roomBeingCreated.id, roomBeingCreated.roomId);
+                // the session may be gone by now; the route re-resolves when it comes back
+                const roomBeingCreated = (this._routedSession ?? this._session())?.roomsBeingCreated.get(this.id);
+                if (roomBeingCreated) {
+                    this._sessionViewModel.notifyRoomReplaced(roomBeingCreated.id, roomBeingCreated.roomId);
+                }
             } else {
                 throw new Error("Don't know how to replace a room with this status: " + (status ^ RoomStatus.Replaced));
             }
@@ -74,8 +135,13 @@ export class RoomViewModelObservable extends ObservableValue {
     }
 
     dispose() {
+        this._routeGeneration += 1;
         if (this._statusSubscription) {
             this._statusSubscription = this._statusSubscription();
+        }
+        this._disposed = true;
+        if (this._routerSubscription) {
+            this._routerSubscription = this._routerSubscription();
         }
         this.unsubscribeAll();
         this.get()?.dispose();

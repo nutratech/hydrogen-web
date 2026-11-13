@@ -128,13 +128,14 @@ export class Client {
         });
     }
 
-    async startRegistration(homeserver, username, password, initialDeviceDisplayName, flowSelector) {
+    async startRegistration(homeserver, username, password, initialDeviceDisplayName, flowSelector, deviceId) {
         const request = this._platform.request;
         const hsApi = new HomeServerApi({homeserver, request});
         const registration = new Registration(homeserver, hsApi, {
             username,
             password,
             initialDeviceDisplayName,
+            deviceId,
         },
         flowSelector);
         return registration;
@@ -154,6 +155,24 @@ export class Client {
                 log.set("isReadonly (Disabled OTK Upload)", true);
             }
             await this._createSessionAfterAuth({accessToken, deviceId, userId, homeserver}, true, isReadOnly, log);
+        });
+    }
+
+    /**
+     * Start a workspace's secondary connection from auth data (see
+     * doc/implementation planning/CYGNUS-WORKSPACE.md). The caller picks the
+     * session ID and records it in the workspace first, so the session info is
+     * written hidden in its first write: there is never a moment where it looks
+     * like an ordinary session that would get a workspace of its own. The
+     * account is not inspected for a dehydrated device, which would replace the
+     * device ID the connection must keep.
+     */
+    async startHiddenWithAuthData(sessionId, {accessToken, deviceId, userId, homeserver}) {
+        if (!sessionId) {
+            throw new TypeError("a session ID is required");
+        }
+        await this._platform.logger.run("startHiddenWithAuthData", async (log) => {
+            await this._createSessionAfterAuth({accessToken, deviceId, userId, homeserver}, false, false, log, {sessionId, hidden: true});
         });
     }
 
@@ -200,8 +219,34 @@ export class Client {
         });
     }
 
-    async _createSessionAfterAuth({deviceId, userId, accessToken, homeserver}, inspectAccountSetup, isReadOnly, log) {
-        const id = this.createNewSessionId();
+    /** Authenticate to another homeserver while requesting this workspace's device ID. */
+    async loginWithDeviceId(loginMethod, deviceId, log) {
+        if (!loginMethod?.homeserver || !deviceId) {
+            throw new TypeError("a homeserver login method and existing device ID are required");
+        }
+        const hsApi = new HomeServerApi({homeserver: loginMethod.homeserver, request: this._platform.request});
+        const response = await loginMethod.login(hsApi, "Hydrogen", log, deviceId);
+        if (response.device_id !== deviceId) {
+            // the server created a session for another device; end it rather than leave it live
+            try {
+                await new HomeServerApi({homeserver: loginMethod.homeserver, accessToken: response.access_token,
+                    request: this._platform.request}).logout({log}).response();
+            } catch (err) {} // eslint-disable-line no-empty
+            throw new Error(`homeserver assigned device ID ${response.device_id || "(none)"}; expected ${deviceId}`);
+        }
+        if (typeof response.user_id !== "string" || typeof response.access_token !== "string") {
+            throw new Error("homeserver login response is missing the user ID or access token");
+        }
+        return {
+            deviceId,
+            userId: response.user_id,
+            accessToken: response.access_token,
+            homeserver: loginMethod.homeserver,
+        };
+    }
+
+    async _createSessionAfterAuth({deviceId, userId, accessToken, homeserver}, inspectAccountSetup, isReadOnly, log, {sessionId, hidden} = {}) {
+        const id = sessionId ?? this.createNewSessionId();
         const lastUsed = this._platform.clock.now();
         const sessionInfo = {
             id,
@@ -213,6 +258,9 @@ export class Client {
             lastUsed,
             isReadOnly,
         };
+        if (hidden) {
+            sessionInfo.hidden = true;
+        }
         let dehydratedDevice;
         if (inspectAccountSetup) {
             dehydratedDevice = await this._inspectAccountAfterLogin(sessionInfo, log);
@@ -276,17 +324,33 @@ export class Client {
         const lastVersionsResponse = await hsApi
             .versions({ timeout: 10000, log })
             .response();
+        if (this._isDisposed) {
+            // disposed while waiting: do not register auth or build a session
+            // No Session owns these resources yet, and callers waiting for a
+            // terminal load status (such as WorkspaceConnections) must settle.
+            olmWorker?.dispose();
+            dehydratedDevice?.dispose();
+            this._error = new Error("client disposed while loading");
+            this._status.set(LoadStatus.Error);
+            return;
+        }
         const mediaRepository = new MediaRepository({
             homeserver: sessionInfo.homeServer,
+            sessionId: sessionInfo.id,
             platform: this._platform,
             serverVersions: lastVersionsResponse.versions,
         });
 
-        // Let the serviceWorkerHandler know of this access-token and homeserver
-        this._platform.updateService.updateAuthData({
-            accessToken: sessionInfo.accessToken,
-            homeserver: sessionInfo.homeServer,
-        });
+        // Let the serviceWorkerHandler know of this access-token and homeserver.
+        // A workspace's hidden connection adds its auth beside the visible
+        // session's instead of replacing it.
+        const auth = {accessToken: sessionInfo.accessToken, homeserver: sessionInfo.homeServer};
+        this._hiddenAuth = sessionInfo.hidden ? {homeserver: sessionInfo.homeServer} : null;
+        if (sessionInfo.hidden) {
+            this._platform.updateService?.updateConnectionAuthData?.(sessionInfo.id, auth);
+        } else {
+            this._platform.updateService.updateAuthData({...auth, sessionId: sessionInfo.id});
+        }
 
         this._session = new Session({
             storage: this._storage,
@@ -377,9 +441,13 @@ export class Client {
             throw Error("No session loaded, cannot update access token");
         }
         this._session.updateAccessToken(token);
-        this._platform.updateService.updateAuthData({
-            accessToken: token,
-        });
+        if (this._hiddenAuth) {
+            this._platform.updateService?.updateConnectionAuthData?.(this._sessionId, {accessToken: token, homeserver: this._hiddenAuth.homeserver});
+        } else {
+            this._platform.updateService.updateAuthData({
+                accessToken: token,
+            });
+        }
         await this._platform.sessionInfoStorage.updateAccessToken(this._sessionId, token);
     }
 
@@ -507,6 +575,10 @@ export class Client {
     }
 
     dispose() {
+        if (this._hiddenAuth) {
+            this._platform.updateService?.removeConnectionAuthData?.(this._sessionId);
+            this._hiddenAuth = null;
+        }
         if (this._reconnectSubscription) {
             this._reconnectSubscription();
             this._reconnectSubscription = null;

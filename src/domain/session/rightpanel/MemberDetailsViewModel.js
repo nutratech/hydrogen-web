@@ -21,6 +21,7 @@ export class MemberDetailsViewModel extends ViewModel {
         this._isEncrypted = options.isEncrypted;
         this._powerLevelsObservable = options.powerLevelsObservable;
         this._session = options.session;
+        this._room = options.room;
         this.track(this._powerLevelsObservable.subscribe(() => this._onPowerLevelsChange()));
         this.track(this._observableMember.subscribe( () => this._onMemberChange()));
         this._userTrust = undefined;
@@ -141,6 +142,83 @@ export class MemberDetailsViewModel extends ViewModel {
 
     get isEncrypted() {
         return this._isEncrypted;
+    }
+
+    get canKick() {
+        return this._isOtherMember &&
+            !!this._powerLevelsObservable.get()?.canKickUser(this._member.userId, this._member.membership);
+    }
+
+    get canBan() {
+        return this._isOtherMember &&
+            !!this._powerLevelsObservable.get()?.canBanUser(this._member.userId, this._member.membership);
+    }
+
+    get _isOtherMember() {
+        // Cygnus rooms key members by principal, so the Matrix ID alone is not enough
+        return !!this._room && !this._room.ownUserIds.includes(this._member.userId);
+    }
+
+    /** "kick" or "ban" while the user is being asked to confirm it, else undefined. */
+    get pendingAction() { return this._pendingAction; }
+
+    get actionBusy() { return !!this._actionBusy; }
+
+    /** Why the last confirmed action failed; the confirmation stays open so it can be retried. */
+    get actionError() { return this._actionError; }
+
+    beginKick() { this._beginAction("kick", this.canKick); }
+
+    beginBan() { this._beginAction("ban", this.canBan); }
+
+    _beginAction(action, allowed) {
+        if (!allowed || this._actionBusy) {
+            return;
+        }
+        this._pendingAction = action;
+        this._actionError = undefined;
+        this.emitChange("pendingAction");
+    }
+
+    cancelAction() {
+        if (this._actionBusy || !this._pendingAction) {
+            return;
+        }
+        this._pendingAction = undefined;
+        this._actionError = undefined;
+        this.emitChange("pendingAction");
+    }
+
+    async confirmAction(reason) {
+        const action = this._pendingAction;
+        if (!action || this._actionBusy) {
+            return;
+        }
+        // power levels or membership may have changed while the confirmation was open
+        if (!(action === "kick" ? this.canKick : this.canBan)) {
+            this._pendingAction = undefined;
+            this.emitChange("pendingAction");
+            return;
+        }
+        this._actionBusy = true;
+        this._actionError = undefined;
+        this.emitChange("pendingAction");
+        try {
+            const trimmed = reason?.trim() || undefined;
+            await this.logger.run(`MemberDetailsViewModel.${action}User`, async log => {
+                if (action === "kick") {
+                    await this._room.kickUser(this.userId, trimmed, log);
+                } else {
+                    await this._room.banUser(this.userId, trimmed, log);
+                }
+            });
+            this._pendingAction = undefined;
+        } catch (err) {
+            this._actionError = err?.message || String(err);
+        } finally {
+            this._actionBusy = false;
+            this.emitChange("pendingAction");
+        }
     }
 
     get powerLevel() {

@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
 Please see LICENSE files in the repository root for full details.
 */
 
+import {isCygnusRoomVersion} from "../cygnus/constants.js";
 import {EventEmitter} from "../../utils/EventEmitter";
 import {RoomSummary} from "./RoomSummary.js";
 import {GapWriter} from "./timeline/persistence/GapWriter.js";
@@ -29,7 +30,7 @@ import {ObservedStateKeyValue} from "./state/ObservedStateKeyValue";
 const EVENT_ENCRYPTED_TYPE = "m.room.encrypted";
 
 export class BaseRoom extends EventEmitter {
-    constructor({roomId, storage, hsApi, mediaRepository, emitCollectionChange, user, createRoomEncryption, getSyncToken, platform}) {
+    constructor({roomId, storage, hsApi, mediaRepository, emitCollectionChange, user, createRoomEncryption, getSyncToken, platform, getCygnus}) {
         super();
         this._roomId = roomId;
         this._storage = storage;
@@ -40,6 +41,7 @@ export class BaseRoom extends EventEmitter {
         this._emitCollectionChange = emitCollectionChange;
         this._timeline = null;
         this._user = user;
+        this._getCygnus = getCygnus;
         this._changedMembersDuringSync = null;
         this._memberList = null;
         this._createRoomEncryption = createRoomEncryption;
@@ -229,6 +231,7 @@ export class BaseRoom extends EventEmitter {
             // if called from sync, there is no summary yet
             if (summary) {
                 this._summary.load(summary);
+                await this._backfillRoomVersion(txn);
             }
             if (this._summary.data.encryption) {
                 const roomEncryption = this._createRoomEncryption(this, this._summary.data.encryption);
@@ -242,6 +245,22 @@ export class BaseRoom extends EventEmitter {
             }
         } catch (err) {
             throw new WrappedError(`Could not load room ${this._roomId}`, err);
+        }
+    }
+
+    /** Summaries stored before `roomVersion` was recorded: read it from the stored create event. */
+    async _backfillRoomVersion(txn) {
+        if (this._summary.data.roomVersion != null) {
+            return;
+        }
+        try {
+            const createState = await txn.roomState?.get(this._roomId, "m.room.create", "");
+            const version = createState?.event?.content?.room_version;
+            if (version) {
+                this._summary.data.roomVersion = version;
+            }
+        } catch (_) {
+            // this transaction does not cover room state; the next sync's create event sets it
         }
     }
 
@@ -335,7 +354,7 @@ export class BaseRoom extends EventEmitter {
                 const relationWriter = new RelationWriter({
                     roomId: this._roomId,
                     fragmentIdComparer: this._fragmentIdComparer,
-                    ownUserId: this._user.id,
+                    getOwnUserIds: () => this.ownUserIds,
                 });
                 const gapWriter = new GapWriter({
                     roomId: this._roomId,
@@ -428,6 +447,25 @@ export class BaseRoom extends EventEmitter {
         return !!this._summary.data.encryption;
     }
 
+    /** The `room_version` from `m.room.create`, once that event has been seen. */
+    get roomVersion() {
+        return this._summary.data.roomVersion ?? undefined;
+    }
+
+    get ownUserIds() {
+        const principal = this.isCygnus ? this._getCygnus?.()?.identity.get()?.principal : undefined;
+        return principal ? [this._user.id, principal] : [this._user.id];
+    }
+
+    get ownRoomUserId() {
+        return this.ownUserIds[1] || this._user.id;
+    }
+
+    /** True for an MSC00FC room, whose user events must be device-signed. */
+    get isCygnus() {
+        return isCygnusRoomVersion(this.roomVersion);
+    }
+
     get isJoined() {
         return this.membership === "join";
     }
@@ -477,7 +515,7 @@ export class BaseRoom extends EventEmitter {
         if (powerLevelsState) {
             return new PowerLevels({
                 powerLevelEvent: powerLevelsState.event,
-                ownUserId: this._user.id,
+                ownUserId: this.ownRoomUserId,
                 membership: this.membership
             });
         }
@@ -485,12 +523,12 @@ export class BaseRoom extends EventEmitter {
         if (createState) {
             return new PowerLevels({
                 createEvent: createState.event,
-                ownUserId: this._user.id,
+                ownUserId: this.ownRoomUserId,
                 membership: this.membership
             });
         } else {
             const membership = this.membership;
-            return new PowerLevels({ownUserId: this._user.id, membership});
+            return new PowerLevels({ownUserId: this.ownRoomUserId, membership});
         }
     }
 
@@ -505,7 +543,20 @@ export class BaseRoom extends EventEmitter {
         if (!observable) {
             this._powerLevelLoading = this._loadPowerLevels();
             const powerLevels = await this._powerLevelLoading;
-            observable = new RetainedObservableValue(powerLevels, () => { this._powerLevels = null; });
+            // a Cygnus room's power levels are keyed by principal, which may arrive after this opens
+            const identity = this.isCygnus ? this._getCygnus?.()?.identity : undefined;
+            let unsubscribeIdentity;
+            observable = new RetainedObservableValue(powerLevels, () => {
+                this._powerLevels = null;
+                unsubscribeIdentity?.();
+            });
+            unsubscribeIdentity = identity?.subscribe(async () => {
+                try {
+                    observable.set(await this._loadPowerLevels());
+                } catch (err) {
+                    console.error("could not reload power levels", err);
+                }
+            });
             this._powerLevels = observable;
             this._powerLevelLoading = null;
         }
@@ -568,7 +619,11 @@ export class BaseRoom extends EventEmitter {
                 clock: this._platform.clock,
                 logger: this._platform.logger,
                 powerLevelsObservable: await this.observePowerLevels(),
-                hsApi: this._hsApi
+                hsApi: this._hsApi,
+                ownUserIds: this.ownUserIds,
+                ownRoomUserId: this.ownRoomUserId,
+                getOwnUserIds: () => this.ownUserIds,
+                getOwnRoomUserId: () => this.ownRoomUserId
             });
             try {
                 if (this._roomEncryption) {
