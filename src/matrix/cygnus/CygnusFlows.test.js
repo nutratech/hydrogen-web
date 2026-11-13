@@ -12,6 +12,7 @@ import {CygnusService} from "./CygnusService.js";
 import {Room} from "../room/Room.js";
 import {PowerLevels} from "../room/PowerLevels.js";
 import {MemberDetailsViewModel} from "../../domain/session/rightpanel/MemberDetailsViewModel.js";
+import {MemberTileViewModel} from "../../domain/session/rightpanel/MemberTileViewModel.js";
 import {CYGNUS_ROOM_VERSION} from "./constants.js";
 import anotherjson from "another-json";
 import {webcrypto} from "node:crypto";
@@ -629,6 +630,15 @@ export function tests() {
             await cygnusRoom.inviteUser("@alice:chat.example.org", "hello");
             assert.equal(cygnusCalls[2].principal, USER_U);
             assert.equal(cygnusCalls[2].membership, "invite");
+        },
+        "member tiles expose the principal behind a Cygnus display name": async assert => {
+            const principal = "@Cl5rPGgj2s7JHMwFxSEOHfFYM_K0PDpnhXEMYwMgQuo";
+            const tile = member => new MemberTileViewModel({member, mediaRepository: {}});
+            assert.equal(tile({userId: principal, name: "@alice:hs.tld"}).principalTitle, principal);
+            // no name learned yet: the principal is already what is shown
+            assert.equal(tile({userId: principal, name: principal}).principalTitle, undefined);
+            // plain Matrix members need no extra hover text
+            assert.equal(tile({userId: "@bob:hs.tld", name: "Bob"}).principalTitle, undefined);
         },
         "member details gate kick and ban by level and current membership": async assert => {
             const alice = "@alice:hs.tld";

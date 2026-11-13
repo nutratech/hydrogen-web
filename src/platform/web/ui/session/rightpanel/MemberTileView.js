@@ -15,7 +15,7 @@ export class MemberTileView extends TemplateView {
             t.a({ href: vm.detailsUrl },
             [
                 t.view(new AvatarView(vm, 32)),
-                t.div({ className: "MemberTileView_name" }, (vm) => vm.name),
+                t.div({ className: "MemberTileView_name", title: vm => vm.principalTitle ?? false }, (vm) => vm.name),
             ])
         );
     }
