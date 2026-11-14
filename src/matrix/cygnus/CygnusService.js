@@ -9,6 +9,7 @@ import {CygnusIdentity} from "./CygnusIdentity.js";
 import {CygnusEventSigner} from "./CygnusEventSigner.js";
 import {CygnusRooms} from "./CygnusRooms.js";
 import {DmlsService} from "./DmlsService.js";
+import {DmlsRegistry} from "./DmlsRegistry.js";
 import {isCygnusRoomVersion} from "./constants.js";
 import {hasPublishedCrossSigningKeys, olmSigner, publishCrossSigningKeys} from "../verification/publishCrossSigningKeys.js";
 
@@ -106,7 +107,9 @@ export class CygnusService {
         /** @type {ObservableValue<CygnusIdentity | undefined>} */
         this.identity = new ObservableValue(undefined);
         // DMLS stays lazy: it touches wasm and IndexedDB only for a room whose
-        // create content selects it, and refuses an unknown version.
+        // create content selects it, and refuses an unknown version. Merge
+        // registries are derived per received merge from a fresh tip bundle.
+        this._dmlsRegistry = new DmlsRegistry({hsApi: this._hsApi});
         this._dmls = new DmlsService({
             storage,
             getIdentity: () => this.identity.get(),
@@ -116,6 +119,7 @@ export class CygnusService {
             sendToDevice: async (type, payload, txnId, log) => {
                 await this._hsApi.sendToDevice(type, payload, txnId, {log}).response();
             },
+            getRegistryJson: (roomId, event) => this._dmlsRegistry.getRegistryJson(roomId, event),
         });
         this._loading = undefined;
         this._identityLock = Promise.resolve();

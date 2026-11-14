@@ -593,6 +593,13 @@ export class DmlsService {
                 if (!registryJson) {
                     return {status: "deferred", reason: "registry_unavailable"};
                 }
+                if (typeof registryJson === "object") {
+                    // The provider deferred and says why (see DmlsRegistry).
+                    return {
+                        status: "deferred", reason: "registry_unavailable",
+                        detail: registryJson.deferred,
+                    };
+                }
                 return this.applyCommit(roomId, event.type, ctxJson, content, registryJson);
             }
             case DMLS_EVENT_TYPES.reboot:
