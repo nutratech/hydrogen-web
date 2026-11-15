@@ -42,7 +42,7 @@ export class Room extends BaseRoom {
         const {getCygnus} = options;
         this._getCygnus = getCygnus;
         /** Last capability classification seen in the create event. */
-        this._dmlsCapability = undefined;
+        this._dmlsCapability = this._summary.data.dmlsSelected ? {capable: false, reason: "unsupported_version"} : undefined;
         this._syncOwnUserIds = null;
         this._sendQueue = new SendQueue({
             roomId: this.id, storage: this._storage, hsApi: this._hsApi, pendingEvents,
@@ -436,6 +436,9 @@ export class Room extends BaseRoom {
     async load(summary, txn, log) {
         try {
             await super.load(summary, txn, log);
+            if (this._summary.data.dmlsSelected) {
+                this._dmlsCapability = {capable: false, reason: "unsupported_version"};
+            }
             await this._syncWriter.load(txn, log);
         } catch (err) {
             throw new WrappedError(`Could not load room ${this._roomId}`, err);

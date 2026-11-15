@@ -105,10 +105,12 @@ export function requestedBranchEventIds(content) {
  * @param {object} input
  * @param {object[]} input.events full, already-verified events
  * @param {string[]} input.requested event ids of the branches being merged
- * @param {string[]} [input.revoked] 32-byte unpadded base64url device keys
+ * @param {string[]} input.revoked 32-byte unpadded base64url device keys the
+ *     caller's source confirms are revoked; `[]` means it confirms none is.
+ *     This is required so silence can never be read as "nothing revoked".
  * @returns {{registryJson: string}|{reason: string}}
  */
-export function buildRegistryJson({events, requested, revoked = []}) {
+export function buildRegistryJson({events, requested, revoked}) {
     if (!Array.isArray(events)) {
         return defer("bundle_events");
     }
@@ -141,8 +143,8 @@ export function buildRegistryJson({events, requested, revoked = []}) {
         }
         queue.push(branch);
     }
-    while (queue.length > 0) {
-        const event = queue.shift();
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+        const event = queue[cursor];
         if (ancestry.has(event.event_id)) {
             continue;
         }
@@ -278,12 +280,13 @@ export function buildRegistryJson({events, requested, revoked = []}) {
         }
         const existing = certificateByDeviceKey.get(deviceKey);
         if (existing) {
-            if (existing.principal !== event.sender || existing.deviceId !== deviceId) {
+            if (existing.principal !== event.sender || existing.deviceId !== deviceId ||
+                existing.canonical !== canonicalJson(certificate)) {
                 return defer("certificate_conflict");
             }
             continue;
         }
-        certificateByDeviceKey.set(deviceKey, {principal: event.sender, deviceId});
+        certificateByDeviceKey.set(deviceKey, {principal: event.sender, deviceId, canonical: canonicalJson(certificate)});
         certificates.push({principal: event.sender, certificate: {
             version, device_id: deviceId, device_key: deviceKey,
             self_signing_key: selfSigningKey,
@@ -339,12 +342,22 @@ export function buildRegistryJson({events, requested, revoked = []}) {
  *
  * The registry is per call and never cached: revocation and rotation are
  * exactly what it must reflect.
+ *
+ * A merge registry always states whether any device is revoked, and wasm
+ * trusts that statement. So `revoked: []` is only meaningful when a real
+ * source confirms nothing is revoked for the requested branches. Without
+ * such a source there is no defensible registry: the client defers with
+ * `revocations_unavailable` rather than let the default empty list stand in
+ * for "nobody is revoked".
  */
 export class DmlsRegistry {
     /**
      * @param {object} options
      * @param {object} [options.hsApi] HomeServerApi with `cygnusTipBundle`
-     * @param {(roomId: string) => Promise<string[]>} [options.getRevokedDeviceKeys]
+     * @param {(roomId: string, requested: string[]) => Promise<string[]>} [options.getRevokedDeviceKeys]
+     *     Returns every revoked device key relevant to the requested branch
+     *     events. Returning `[]` asserts that none is revoked; the source must
+     *     cover every principal in scope, not just the local user's devices.
      */
     constructor({hsApi, getRevokedDeviceKeys} = {}) {
         this._hsApi = hsApi;
@@ -364,6 +377,11 @@ export class DmlsRegistry {
         if (requested.length === 0) {
             return {deferred: "missing_requested"};
         }
+        // Fail closed before any work: a registry must never claim that
+        // nothing is revoked on behalf of a source that does not exist.
+        if (!this._getRevokedDeviceKeys) {
+            return {deferred: "revocations_unavailable"};
+        }
         if (!this._hsApi?.cygnusTipBundle) {
             return {deferred: "tip_bundle_unavailable"};
         }
@@ -377,13 +395,14 @@ export class DmlsRegistry {
         if (!Array.isArray(events)) {
             return {deferred: "tip_bundle_shape"};
         }
-        let revoked = [];
-        if (this._getRevokedDeviceKeys) {
-            try {
-                revoked = await this._getRevokedDeviceKeys(roomId);
-            } catch (_) {
-                return {deferred: "revocations_unavailable"};
-            }
+        let revoked;
+        try {
+            revoked = await this._getRevokedDeviceKeys(roomId, requested);
+        } catch (_) {
+            return {deferred: "revocations_unavailable"};
+        }
+        if (!Array.isArray(revoked)) {
+            return {deferred: "revocations_unavailable"};
         }
         const result = buildRegistryJson({events, requested, revoked});
         return result.registryJson ?? {deferred: result.reason};

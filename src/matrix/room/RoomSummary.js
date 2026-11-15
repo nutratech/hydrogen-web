@@ -79,6 +79,9 @@ export function processStateEvent(data, event, ownUserId) {
         data = data.cloneIfNeeded();
         data.lastMessageTimestamp = event.origin_server_ts;
         data.roomVersion = event.content?.room_version ?? null;
+        const roomVersion = event.content?.room_version;
+        data.dmlsSelected = typeof roomVersion === "string" && roomVersion.startsWith("tk.nutra.cygnus.") &&
+            Object.prototype.hasOwnProperty.call(event.content || {}, "tk.nutra.cygnus.dmls");
     } else if (event.type === "m.room.encryption") {
         const algorithm = event.content?.algorithm;
         if (!data.encryption && algorithm === MEGOLM_ALGORITHM) {
@@ -181,6 +184,7 @@ export class SummaryData {
         this.isDirectMessage = copy ? copy.isDirectMessage : false;
         this.dmUserId = copy ? copy.dmUserId : null;
         this.roomVersion = copy ? (copy.roomVersion ?? null) : null;
+        this.dmlsSelected = copy ? (copy.dmlsSelected ?? false) : false;
         this.cloned = copy ? true : false;
     }
 

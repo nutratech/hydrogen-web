@@ -85,7 +85,11 @@ function household({ extra = [] } = {}) {
         event_id: "$branch2", type: "m.dmls.commit", sender: P2,
         auth_events: ["$epoch2", "$root2", "$member2"], content: {},
     };
-    return {events: [e1, e2, r1, r2, m1, m2, b1, b2, ...extra], requested: ["$branch1", "$branch2"]};
+    return {
+        events: [e1, e2, r1, r2, m1, m2, b1, b2, ...extra],
+        requested: ["$branch1", "$branch2"],
+        revoked: [],
+    };
 }
 
 function reasonsHarness() {
@@ -100,6 +104,12 @@ export function tests() {
     const mutateAndBuild = reasonsHarness();
 
     return {
+        "defers when revocation completeness is not supplied": assert => {
+            const incomplete = household();
+            delete incomplete.revoked;
+            assert.deepEqual(buildRegistryJson(incomplete), {reason: "bad_revocations"});
+        },
+
         "builds canonical principal-major registryJson": assert => {
             const {registryJson} = buildRegistryJson(household());
             assert.equal(typeof registryJson, "string");
@@ -138,18 +148,32 @@ export function tests() {
             assert.deepEqual(result, {reason: "missing_auth_event"});
         },
 
-        "defers on a device-root generation gap": assert => {
+        "defers when a genesis device root starts after generation one": assert => {
             const result = mutateAndBuild(input => {
                 input.events.find(event => event.event_id === "$root1").content.generation = 2;
             });
             assert.deepEqual(result, {reason: "root_gap"});
         },
 
-        "defers when previous_root does not name the prior root": assert => {
+        "defers when a genesis device root names a previous root": assert => {
             const result = mutateAndBuild(input => {
                 input.events.find(event => event.event_id === "$root1").content.previous_root = "$nope";
             });
             assert.deepEqual(result, {reason: "root_previous"});
+        },
+
+        "defers on a same-height root generation gap": assert => {
+            const input = household();
+            input.events.push(root(P1, SELF1, 7, 3, "$root1", "$root1c", ["$epoch1", "$root1"]));
+            input.events.find(event => event.event_id === "$branch1").auth_events.push("$root1c");
+            assert.deepEqual(buildRegistryJson(input), {reason: "root_gap"});
+        },
+
+        "defers on a same-height previous-root mismatch": assert => {
+            const input = household();
+            input.events.push(root(P1, SELF1, 7, 2, "$wrong", "$root1b", ["$epoch1", "$root1"]));
+            input.events.find(event => event.event_id === "$branch1").auth_events.push("$root1b");
+            assert.deepEqual(buildRegistryJson(input), {reason: "root_previous"});
         },
 
         "defers when a root has no certified device in its ancestry": assert => {
@@ -202,6 +226,21 @@ export function tests() {
             assert.deepEqual(result, {reason: "certificate_conflict"});
         },
 
+        "rejects conflicting duplicate certificates for the same device": assert => {
+            const input = household();
+            input.events.find(event => event.event_id === "$member2").device_certificate =
+                certificate("D1", DEVICE1, SELF2);
+            input.events.find(event => event.event_id === "$branch2").auth_events.push("$member1");
+            input.events.find(event => event.event_id === "$member1").auth_events.push("$member2");
+            assert.deepEqual(buildRegistryJson(input), {reason: "certificate_conflict"});
+        },
+
+        "requires an explicit revocation list": assert => {
+            const {revoked, ...input} = household();
+            assert.deepEqual(revoked, []);
+            assert.deepEqual(buildRegistryJson(input), {reason: "bad_revocations"});
+        },
+
         "validates revocations and deduplicates them": assert => {
             const key = b64u(fill(0x81));
             const input = {...household(), revoked: [key, key]};
@@ -229,7 +268,8 @@ export function tests() {
                     return {response: async () => ({events})};
                 },
             };
-            const registry = new DmlsRegistry({hsApi});
+            const getRevokedDeviceKeys = async () => [];
+            const registry = new DmlsRegistry({hsApi, getRevokedDeviceKeys});
             const merge = {type: "m.dmls.merge", content: {resolves: [
                 {event_id: "$branch1"}, {event_id: "$branch2"},
             ]}};
@@ -241,14 +281,44 @@ export function tests() {
 
             const empty = new DmlsRegistry({hsApi: {
                 cygnusTipBundle: () => ({response: async () => ({events: []})}),
-            }});
+            }, getRevokedDeviceKeys});
             assert.deepEqual(await empty.getRegistryJson("!room", merge), {deferred: "missing_branch"});
             const offline = new DmlsRegistry({hsApi: {
                 cygnusTipBundle: () => ({response: async () => { throw new Error("offline"); }}),
-            }});
+            }, getRevokedDeviceKeys});
             assert.deepEqual(await offline.getRegistryJson("!room", merge), {deferred: "tip_bundle_unavailable"});
             // A commit never needs a registry.
             assert.equal(await registry.getRegistryJson("!room", {type: "m.dmls.commit"}), undefined);
+        },
+
+        "defers rather than assert revocations without a real source": async assert => {
+            const {events} = household();
+            const hsApi = {cygnusTipBundle: () => ({response: async () => ({events})})};
+            const merge = {type: "m.dmls.merge", content: {resolves: [
+                {event_id: "$branch1"}, {event_id: "$branch2"},
+            ]}};
+
+            // A missing provider must not become `revoked: []`.
+            const missing = new DmlsRegistry({hsApi});
+            assert.deepEqual(await missing.getRegistryJson("!room", merge), {deferred: "revocations_unavailable"});
+
+            const failing = new DmlsRegistry({hsApi, getRevokedDeviceKeys: async () => {
+                throw new Error("no store");
+            }});
+            assert.deepEqual(await failing.getRegistryJson("!room", merge), {deferred: "revocations_unavailable"});
+
+            const malformed = new DmlsRegistry({hsApi, getRevokedDeviceKeys: async () => "none"});
+            assert.deepEqual(await malformed.getRegistryJson("!room", merge), {deferred: "revocations_unavailable"});
+
+            // The provider sees the requested branch scope and can complete it.
+            let scope = null;
+            const present = new DmlsRegistry({hsApi, getRevokedDeviceKeys: async (_roomId, requested) => {
+                scope = requested;
+                return [];
+            }});
+            const result = await present.getRegistryJson("!room", merge);
+            assert.deepEqual(scope, ["$branch1", "$branch2"]);
+            assert.deepEqual(JSON.parse(result).revoked, []);
         },
     };
 }

@@ -32,6 +32,10 @@ export class CreateRoomViewModel extends ViewModel {
         this._cygnusRoomRecovery = undefined;
         const cygnus = session.cygnus;
         if (cygnus) {
+            cygnus.getRoomCreationRecovery().then(recovery => {
+                this._cygnusRoomRecovery = recovery;
+                this.emitChange("canCreate");
+            }, () => {});
             this.track(cygnus.identity.subscribe(() => this.emitChange("canUseCygnus")));
             cygnus.load().then(() => this.emitChange("canUseCygnus"), () => {});
         }
@@ -97,7 +101,7 @@ export class CreateRoomViewModel extends ViewModel {
     }
 
     create() {
-        if (this._cygnusRoomRecovery) {
+        if (this._cygnusRoomRecovery && this.isCygnus) {
             return this._createCygnusRoom();
         }
         if (this.isCygnus) {
@@ -135,6 +139,10 @@ export class CreateRoomViewModel extends ViewModel {
             const roomId = await this.logger.run("cygnus create room", log => {
                 if (this._cygnusRoomRecovery) {
                     const {roomId, roomSetup} = this._cygnusRoomRecovery;
+                    if (roomSetup.name !== this._name || roomSetup.topic !== (this._topic || undefined) ||
+                        roomSetup.isPublic !== this._isPublic) {
+                        throw new Error("The failed room setup uses the previous name, topic and visibility. Restore those values or switch off Cygnus to create a standard room.");
+                    }
                     return this._session.cygnus.finishRoom(roomId, roomSetup, log);
                 }
                 return this._session.cygnus.createRoom({
@@ -144,11 +152,13 @@ export class CreateRoomViewModel extends ViewModel {
                 }, log);
             });
             this._cygnusRoomRecovery = undefined;
+            await this._session.cygnus.setRoomCreationRecovery(undefined);
             this.navigation.push("room", roomId);
         } catch (err) {
             this._error = err.message;
             if (err.roomId && err.roomSetup) {
                 this._cygnusRoomRecovery = {roomId: err.roomId, roomSetup: err.roomSetup};
+                await this._session.cygnus.setRoomCreationRecovery(this._cygnusRoomRecovery);
             }
         } finally {
             this._isCreating = false;

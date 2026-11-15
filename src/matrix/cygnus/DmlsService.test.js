@@ -151,6 +151,30 @@ export function tests() {
             assert.equal(reboot.reason, "missing_base_state");
         },
 
+        "preserves the deferred reason from the merge registry provider": async assert => {
+            await loadWasm();
+            const storage = await createMockStorage();
+            const sends = captureSends();
+            const service = new DmlsService({
+                storage,
+                getIdentity: () => identity(ALICE, "A1", ALICE_SEED),
+                subtleCrypto: webcrypto.subtle,
+                getRandomValues: bytes => webcrypto.getRandomValues(bytes),
+                sendEvent: sends.sendEvent,
+                getRegistryJson: async () => ({deferred: "tip_bundle_unavailable"}),
+            });
+            const result = await service.handleRoomEvent(ROUTE_ROOM, {
+                type: DMLS_EVENT_TYPES.merge,
+                sender: ALICE,
+                device_certificate: {device_id: "A1"},
+                prev_events: [],
+                content: {group_id: "not-used"},
+            });
+            assert.deepEqual(result, {
+                status: "deferred", reason: "registry_unavailable", detail: "tip_bundle_unavailable",
+            });
+        },
+
         "stores key-package secrets encrypted and writes them before publishing": async assert => {
             await loadWasm();
             const storage = await createMockStorage();

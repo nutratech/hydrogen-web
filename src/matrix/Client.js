@@ -328,8 +328,11 @@ export class Client {
             // disposed while waiting: do not register auth or build a session
             // No Session owns these resources yet, and callers waiting for a
             // terminal load status (such as WorkspaceConnections) must settle.
-            olmWorker?.dispose();
             dehydratedDevice?.dispose();
+            this._requestScheduler?.stop();
+            this._requestScheduler = null;
+            this._storage?.close();
+            this._storage = null;
             this._error = new Error("client disposed while loading");
             this._status.set(LoadStatus.Error);
             return;

@@ -27,6 +27,7 @@ function base64UrlToBase64(value) {
 
 const MOVE_BUNDLE_AAD = new TextEncoder().encode("tk.nutra.cygnus.move.v1");
 const MOVE_BUNDLE_ITERATIONS = 250000;
+const ROOM_RECOVERY_KEY = "cygnus.roomCreationRecovery";
 
 function encodeBytes(bytes) {
     let binary = "";
@@ -109,6 +110,12 @@ export class CygnusService {
         // DMLS stays lazy: it touches wasm and IndexedDB only for a room whose
         // create content selects it, and refuses an unknown version. Merge
         // registries are derived per received merge from a fresh tip bundle.
+        //
+        // No `getRevokedDeviceKeys` is supplied yet, so every registry request
+        // defers with `revocations_unavailable` and received merges stay
+        // deferred. That is deliberate: the registry cannot say "nothing is
+        // revoked" on behalf of a source that does not exist. Do not replace
+        // the absent provider with an empty list.
         this._dmlsRegistry = new DmlsRegistry({hsApi: this._hsApi});
         this._dmls = new DmlsService({
             storage,
@@ -140,6 +147,26 @@ export class CygnusService {
     /** DMLS group lifecycle, storage, and protocol routing for this device. */
     get dmls() {
         return this._dmls;
+    }
+
+    async getRoomCreationRecovery() {
+        const txn = await this._storage.readTxn([this._storage.storeNames.session]);
+        return txn.session.get(ROOM_RECOVERY_KEY);
+    }
+
+    async setRoomCreationRecovery(recovery) {
+        const txn = await this._storage.readWriteTxn([this._storage.storeNames.session]);
+        try {
+            if (recovery) {
+                txn.session.set(ROOM_RECOVERY_KEY, recovery);
+            } else {
+                txn.session.remove(ROOM_RECOVERY_KEY);
+            }
+        } catch (err) {
+            txn.abort();
+            throw err;
+        }
+        await txn.complete();
     }
 
     load(log) {
@@ -634,7 +661,7 @@ export class CygnusService {
         // the request when the caller (or a pending event) has not supplied
         // one, so a lost response cannot make the retry sign a second event.
         if (!txnId) {
-            const {contentHash} = this._crypto.contentHash({
+            const hash = this._crypto.contentHash({
                 principal: identity.principal,
                 deviceId: identity.deviceId,
                 roomId,
@@ -642,7 +669,10 @@ export class CygnusService {
                 stateKey,
                 content,
             });
-            txnId = `cygnus-state-${contentHash}`;
+            if (!hash.ok) {
+                throw new Error(`cannot hash state event: ${hash.error}`);
+            }
+            txnId = `cygnus-state-${hash.contentHash}`;
         }
         const {eventId} = await this._signer(identity).send({roomId, type, stateKey, content}, {log, txnId});
         return eventId;

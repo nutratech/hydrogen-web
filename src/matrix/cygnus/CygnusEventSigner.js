@@ -217,9 +217,7 @@ export class CygnusEventSigner {
                 }
                 return result;
             } catch (err) {
-                if (await this._get(signedEventKey(txnId))) {
-                    queue.pendingTxnId = txnId;
-                }
+                queue.pendingTxnId = await this._get(signedEventKey(txnId)) ? txnId : undefined;
                 throw err;
             }
         });

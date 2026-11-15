@@ -18,6 +18,7 @@ export interface DmlsGroupRecord {
     roomId: string;
     seq: number;
     updatedTs: number;
+    active?: boolean;
     blob: DmlsCiphertext;
 }
 
@@ -48,6 +49,10 @@ export class DmlsGroupStore {
     /** The most recently written group for a room, which a reboot supersedes. */
     async getActiveForRoom(roomId: string): Promise<DmlsGroupRecord | undefined> {
         const records = await this.getAllForRoom(roomId);
+        const explicitlyActive = records.find(record => record.active === true);
+        if (explicitlyActive) {
+            return explicitlyActive;
+        }
         return records.reduce((active, record) =>
             !active || record.updatedTs > active.updatedTs ? record : active, undefined);
     }
@@ -72,6 +77,10 @@ export class DmlsKeyPackageStore {
         return this._store.get(keyPackageId);
     }
 
+    getForRoom(roomId: string): Promise<DmlsKeyPackageRecord[]> {
+        return this._store.index("byRoom").selectAll(this._store.IDBKeyRange.only(roomId));
+    }
+
     set(record: DmlsKeyPackageRecord): void {
         this._store.put(record);
     }
@@ -82,11 +91,9 @@ export class DmlsKeyPackageStore {
 
     /** Drop every stored package for a room (leaving or wiping a group). */
     async removeForRoom(roomId: string): Promise<void> {
-        const all = await this._store.selectAll(undefined);
-        for (const record of all) {
-            if (record.roomId === roomId) {
-                this._store.delete(record.keyPackageId);
-            }
+        const records = await this._store.index("byRoom").selectAll(this._store.IDBKeyRange.only(roomId));
+        for (const record of records) {
+            this._store.delete(record.keyPackageId);
         }
     }
 }

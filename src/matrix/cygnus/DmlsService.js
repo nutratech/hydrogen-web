@@ -144,7 +144,7 @@ export class DmlsService {
      * @param {(bytes: Uint8Array) => Uint8Array} [options.getRandomValues]
      * @param {(roomId: string, type: string, content: object, txnId: string, log?: object) => Promise<string>} options.sendEvent
      * @param {(type: string, payload: object, txnId: string, log?: object) => Promise<void>} [options.sendToDevice]
-     * @param {(roomId: string, event: object) => Promise<string|undefined>} [options.getRegistryJson]
+     * @param {(roomId: string, event: object) => Promise<string|{deferred: string}|undefined>} [options.getRegistryJson]
      * @param {() => number} [options.now]
      */
     constructor({
@@ -316,7 +316,16 @@ export class DmlsService {
             txn.abort();
             throw new DmlsError("stale_state", groupId);
         }
-        txn.dmlsGroups.set({groupId, roomId, seq, updatedTs: this._now(), blob});
+        const active = current ? current.active !== false : true;
+        if (!current) {
+            const roomGroups = await txn.dmlsGroups.getAllForRoom(roomId);
+            for (const record of roomGroups) {
+                if (record.active !== false) {
+                    txn.dmlsGroups.set({...record, active: false});
+                }
+            }
+        }
+        txn.dmlsGroups.set({groupId, roomId, seq, updatedTs: this._now(), active, blob});
         await txn.complete();
         this._loadedSeq.set(groupId, seq);
     }
@@ -415,6 +424,7 @@ export class DmlsService {
      * The caller may now publish `content`; a Welcome can arrive immediately.
      */
     async keyPackage(roomId) {
+        await this._pruneExpiredKeyPackages(roomId);
         const out = parseWasm(wasm.dmlsKeyPackage(this._identityJson(), this._seed()), "key_package");
         const secret = await this._seal("key-package", out.secretsB64);
         const txn = await this._storage.readWriteTxn([this._storage.storeNames.dmlsKeyPackages]);
@@ -426,6 +436,17 @@ export class DmlsService {
         });
         await txn.complete();
         return out;
+    }
+
+    async _pruneExpiredKeyPackages(roomId) {
+        const txn = await this._storage.readWriteTxn([this._storage.storeNames.dmlsKeyPackages]);
+        const records = await txn.dmlsKeyPackages.getForRoom(roomId);
+        for (const record of records) {
+            if (typeof record.expiresTs === "number" && record.expiresTs <= this._now()) {
+                txn.dmlsKeyPackages.remove(record.keyPackageId);
+            }
+        }
+        await txn.complete();
     }
 
     /** Store the KeyPackage secret, then publish the event. */
@@ -582,13 +603,15 @@ export class DmlsService {
         }
         const contentJson = JSON.stringify(event.content ?? {});
         const content = contentOf(contentJson);
-        const ctxJson = JSON.stringify(await this._contextForEvent(roomId, event));
         switch (event.type) {
             case DMLS_EVENT_TYPES.commit:
-            case DMLS_EVENT_TYPES.externalCommit:
+            case DMLS_EVENT_TYPES.externalCommit: {
+                const commitCtxJson = JSON.stringify(await this._contextForEvent(roomId, event));
                 return this.applyCommit(
-                    roomId, event.type, ctxJson, content, undefined);
+                    roomId, event.type, commitCtxJson, content, undefined);
+            }
             case DMLS_EVENT_TYPES.merge: {
+                const ctxJson = JSON.stringify(await this._contextForEvent(roomId, event));
                 const registryJson = await this._getRegistryJson?.(roomId, event);
                 if (!registryJson) {
                     return {status: "deferred", reason: "registry_unavailable"};
@@ -602,8 +625,10 @@ export class DmlsService {
                 }
                 return this.applyCommit(roomId, event.type, ctxJson, content, registryJson);
             }
-            case DMLS_EVENT_TYPES.reboot:
+            case DMLS_EVENT_TYPES.reboot: {
+                const ctxJson = JSON.stringify(await this._contextForEvent(roomId, event));
                 return this.checkReboot(content, ctxJson);
+            }
             default:
                 return {status: "ignored", reason: event.type};
         }
