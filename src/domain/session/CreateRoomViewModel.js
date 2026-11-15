@@ -30,12 +30,16 @@ export class CreateRoomViewModel extends ViewModel {
         this._isCreating = false;
         this._error = undefined;
         this._cygnusRoomRecovery = undefined;
+        this._recoveryLoadError = undefined;
+        this._recoveryReady = Promise.resolve();
         const cygnus = session.cygnus;
         if (cygnus) {
-            cygnus.getRoomCreationRecovery().then(recovery => {
+            this._recoveryReady = cygnus.getRoomCreationRecovery().then(recovery => {
                 this._cygnusRoomRecovery = recovery;
                 this.emitChange("canCreate");
-            }, () => {});
+            }, err => {
+                this._recoveryLoadError = err;
+            });
             this.track(cygnus.identity.subscribe(() => this.emitChange("canUseCygnus")));
             cygnus.load().then(() => this.emitChange("canUseCygnus"), () => {});
         }
@@ -100,7 +104,13 @@ export class CreateRoomViewModel extends ViewModel {
         this.emitChange("isAdvancedShown");
     }
 
-    create() {
+    async create() {
+        await this._recoveryReady;
+        if (this._recoveryLoadError) {
+            this._error = `Could not check for a room to resume: ${this._recoveryLoadError.message}`;
+            this.emitChange("canCreate");
+            return;
+        }
         if (this._cygnusRoomRecovery && this.isCygnus) {
             return this._createCygnusRoom();
         }
@@ -151,9 +161,17 @@ export class CreateRoomViewModel extends ViewModel {
                     isPublic: this._isPublic,
                 }, log);
             });
-            this._cygnusRoomRecovery = undefined;
-            await this._session.cygnus.setRoomCreationRecovery(undefined);
             this.navigation.push("room", roomId);
+            if (this._cygnusRoomRecovery) {
+                try {
+                    await this._session.cygnus.setRoomCreationRecovery(undefined);
+                    this._cygnusRoomRecovery = undefined;
+                } catch (err) {
+                    // The room exists and is ready; preserve the recovery record
+                    // so a later visit can safely retry its cleanup.
+                    this._error = `Room created, but its recovery record could not be cleared: ${err.message}`;
+                }
+            }
         } catch (err) {
             this._error = err.message;
             if (err.roomId && err.roomSetup) {

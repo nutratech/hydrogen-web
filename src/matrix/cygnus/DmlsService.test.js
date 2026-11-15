@@ -151,6 +151,46 @@ export function tests() {
             assert.equal(reboot.reason, "missing_base_state");
         },
 
+        "expires stored key packages and keeps unexpired packages": async assert => {
+            await loadWasm();
+            const storage = await createMockStorage();
+            const txn = await storage.readWriteTxn([storage.storeNames.dmlsKeyPackages]);
+            const secret = {v: 1, iv: "iv", ct: "ciphertext"};
+            txn.dmlsKeyPackages.set({keyPackageId: "expired", roomId: KEY_ROOM, secret, expiresTs: 9});
+            txn.dmlsKeyPackages.set({keyPackageId: "valid", roomId: KEY_ROOM, secret, expiresTs: 11});
+            await txn.complete();
+            const service = new DmlsService({
+                storage,
+                getIdentity: () => identity(BOB, "B1", BOB_SEED),
+                subtleCrypto: webcrypto.subtle,
+                getRandomValues: bytes => webcrypto.getRandomValues(bytes),
+                sendEvent: async () => "$unused",
+                now: () => 10,
+            });
+            await service.keyPackage(KEY_ROOM);
+            const read = await storage.readTxn([storage.storeNames.dmlsKeyPackages]);
+            assert.equal(await read.dmlsKeyPackages.get("expired"), undefined);
+            assert.equal((await read.dmlsKeyPackages.get("valid")).expiresTs, 11);
+        },
+
+        "installing a second room group deactivates the previous group": async assert => {
+            await loadWasm();
+            const storage = await createMockStorage();
+            const service = await makeService(storage, identity(ALICE, "A1", ALICE_SEED), captureSends());
+            const first = await service.createGroup(KEY_ROOM);
+            const second = await service.createGroup(`${KEY_ROOM}-replacement`);
+            const secondRecord = await groupRecord(storage, second.groupId);
+            const plaintext = await service._open("group", secondRecord.blob);
+            const txn = await storage.readWriteTxn([storage.storeNames.dmlsGroups]);
+            txn.dmlsGroups.remove(second.groupId);
+            await txn.complete();
+            await service._writeCas(
+                second.groupId, KEY_ROOM, undefined, plaintext, secondRecord.seq);
+            assert.equal((await groupRecord(storage, first.groupId)).active, false);
+            assert.equal((await groupRecord(storage, second.groupId)).active, true);
+            assert.equal((await service.activeGroup(KEY_ROOM)).groupId, second.groupId);
+        },
+
         "preserves the deferred reason from the merge registry provider": async assert => {
             await loadWasm();
             const storage = await createMockStorage();

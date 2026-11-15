@@ -53,7 +53,7 @@ export class DmlsGroupStore {
         if (explicitlyActive) {
             return explicitlyActive;
         }
-        return records.reduce((active, record) =>
+        return records.reduce<DmlsGroupRecord | undefined>((active, record) =>
             !active || record.updatedTs > active.updatedTs ? record : active, undefined);
     }
 

@@ -585,6 +585,26 @@ export function tests() {
             // "kick" is not a membership: it is a leave event sent by someone else
             assert.deepEqual(sent[1].content, {membership: "leave", reason: "spam"});
         },
+        "identical state sends get distinct default transaction IDs": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity();
+            const {api} = assistedApi(crypto, identity);
+            const txnIds = [];
+            const sendSigned = api.cygnusSendSigned;
+            api.cygnusSendSigned = (txnId, event, options) => {
+                txnIds.push(txnId);
+                return sendSigned(txnId, event, options);
+            };
+            const service = new CygnusService({
+                storage, hsApi: api, userId: "@alice:chat.example.org", deviceId: "HYDROGEN",
+            });
+            service._crypto = crypto;
+            service._isSupported = true;
+            service.identity.set(identity);
+            await service.sendStateEvent(ROOM_ID, "m.room.topic", {topic: "Lobby"});
+            await service.sendStateEvent(ROOM_ID, "m.room.topic", {topic: "Lobby"});
+            assert.equal(txnIds.length, 2);
+            assert.notEqual(txnIds[0], txnIds[1]);
+        },
         "a state-event retry resends the same signed event": async assert => {
             const {identity, crypto, storage} = await aliceIdentity();
             const {api, drafts} = assistedApi(crypto, identity);
@@ -603,8 +623,8 @@ export function tests() {
             service._crypto = crypto;
             service._isSupported = true;
             service.identity.set(identity);
-            await assert.rejects(service.sendStateEvent(ROOM_ID, "m.room.topic", {topic: "Lobby"}), /offline/);
-            await service.sendStateEvent(ROOM_ID, "m.room.topic", {topic: "Lobby"});
+            await assert.rejects(service.sendStateEvent(ROOM_ID, "m.room.topic", {topic: "Lobby"}, "", undefined, "stable-retry"), /offline/);
+            await service.sendStateEvent(ROOM_ID, "m.room.topic", {topic: "Lobby"}, "", undefined, "stable-retry");
             // the retry reused the stored signed event rather than drafting a second one
             assert.equal(drafts.length, 1);
         },
@@ -976,6 +996,31 @@ export function tests() {
             assert.equal(storage.values.has(signedEventKey("pending-2")), false);
             await signer.send(req, {txnId: "pending-2"});
             assert.equal(drafts, 2);
+        },
+        "a rejected pending transaction unblocks a new room send": async assert => {
+            const {identity, crypto, storage} = await aliceIdentity();
+            const {api} = assistedApi(crypto, identity);
+            const sendSigned = api.cygnusSendSigned;
+            let attempt = 0;
+            api.cygnusSendSigned = (txnId, event, options) => {
+                attempt += 1;
+                if (attempt === 1) {
+                    return request(new ConnectionError("temporary failure"));
+                }
+                if (attempt === 2) {
+                    return request(new HomeServerError("PUT", "/send_signed", {errcode: "M_FORBIDDEN"}, 403));
+                }
+                return sendSigned(txnId, event, options);
+            };
+            const signer = new CygnusEventSigner({identity, crypto, hsApi: api, storage, createTxnId: () => "unused"});
+            const requestX = {roomId: ROOM_ID, type: "m.room.message", content: {body: "X"}};
+            await assert.rejects(signer.send(requestX, {txnId: "X"}), /temporary failure/);
+            await assert.rejects(signer.send(requestX, {txnId: "X"}));
+            const result = await signer.send({
+                roomId: ROOM_ID, type: "m.room.message", content: {body: "Y"},
+            }, {txnId: "Y"});
+            assert.equal(typeof result.eventId, "string");
+            assert.equal(attempt, 3);
         },
         "rejects drafts that differ from the request": async assert => {
             const {identity, crypto} = await aliceIdentity();

@@ -657,9 +657,8 @@ export class CygnusService {
      */
     async sendStateEvent(roomId, type, content, stateKey = "", log, txnId) {
         const identity = this._requireIdentity();
-        // A retry must resend the same signed event. Derive a stable ID from
-        // the request when the caller (or a pending event) has not supplied
-        // one, so a lost response cannot make the retry sign a second event.
+        // Callers that need retry idempotency supply the pending event's txnId.
+        // A fresh default ID must distinguish repeated identical state changes.
         if (!txnId) {
             const hash = this._crypto.contentHash({
                 principal: identity.principal,
@@ -672,7 +671,7 @@ export class CygnusService {
             if (!hash.ok) {
                 throw new Error(`cannot hash state event: ${hash.error}`);
             }
-            txnId = `cygnus-state-${hash.contentHash}`;
+            txnId = `cygnus-state-${hash.contentHash}-${this._crypto.generateSeed().slice(0, 12)}`;
         }
         const {eventId} = await this._signer(identity).send({roomId, type, stateKey, content}, {log, txnId});
         return eventId;
