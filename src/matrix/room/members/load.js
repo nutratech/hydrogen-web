@@ -54,8 +54,17 @@ async function fetchMembers({summary, syncToken, roomId, hsApi, storage, setChan
             if (changedMember) {
                 return changedMember;
             } else {
-                const member = RoomMember.fromMemberEvent(roomId, memberEvent);
+                let member = RoomMember.fromMemberEvent(roomId, memberEvent);
                 if (member) {
+                    const stored = await roomMembers.get(roomId, userId);
+                    if (stored?.cygnusDisplayName !== undefined) {
+                        member = new RoomMember({
+                            ...member.serialize(),
+                            cygnusDisplayName: stored.cygnusDisplayName,
+                            cygnusEpochHeight: stored.cygnusEpochHeight,
+                            displayName: stored.cygnusDisplayName,
+                        });
+                    }
                     roomMembers.set(member.serialize());
                 }
                 return member;
@@ -112,7 +121,7 @@ async function fetchMember({roomId, userId, hsApi, storage}, log) {
         }
         throw error;
     }
-    const member = new RoomMember({
+    const fetchedMember = new RoomMember({
         roomId,
         userId,
         membership: memberData.membership,
@@ -120,7 +129,17 @@ async function fetchMember({roomId, userId, hsApi, storage}, log) {
         displayName: memberData.displayname,
     });
     const txn = await storage.readWriteTxn([storage.storeNames.roomMembers]);
+    let member = fetchedMember;
     try {
+        const stored = await txn.roomMembers.get(roomId, userId);
+        if (stored?.cygnusDisplayName !== undefined) {
+            member = new RoomMember({
+                ...member.serialize(),
+                displayName: stored.cygnusDisplayName,
+                cygnusDisplayName: stored.cygnusDisplayName,
+                cygnusEpochHeight: stored.cygnusEpochHeight,
+            });
+        }
         txn.roomMembers.set(member.serialize());
     }
     catch(e) {

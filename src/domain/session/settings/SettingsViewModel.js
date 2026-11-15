@@ -9,6 +9,7 @@ Please see LICENSE files in the repository root for full details.
 import {ViewModel} from "../../ViewModel";
 import {KeyBackupViewModel} from "./KeyBackupViewModel";
 import {FeaturesViewModel} from "./FeaturesViewModel";
+import {CygnusIdentityViewModel} from "./CygnusIdentityViewModel";
 import {submitLogsFromSessionToDefaultServer} from "../../../domain/rageshake";
 
 class PushNotificationStatus {
@@ -47,6 +48,13 @@ export class SettingsViewModel extends ViewModel {
         this._activeTheme = undefined;
         this._logsFeedbackMessage = undefined;
         this._featuresViewModel = new FeaturesViewModel(this.childOptions());
+        const cygnus = this._session.cygnus;
+        this._cygnusIdentityViewModel = cygnus ? this.track(new CygnusIdentityViewModel(this.childOptions({cygnus}))) : undefined;
+    }
+
+    /** `undefined` unless the Cygnus feature is enabled. */
+    get cygnusIdentityViewModel() {
+        return this._cygnusIdentityViewModel;
     }
 
     get _session() {

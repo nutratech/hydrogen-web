@@ -48,7 +48,8 @@ export class RightPanelViewModel extends ViewModel {
             isEncrypted,
             powerLevelsObservable,
             mediaRepository: this._room.mediaRepository,
-            session: this._session
+            session: this._session,
+            room: this._room,
         };
     }
 

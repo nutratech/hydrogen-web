@@ -11,6 +11,8 @@ Please see LICENSE files in the repository root for full details.
 import {RootViewModel} from "../../domain/RootViewModel.js";
 import {createNavigation, createRouter} from "../../domain/navigation/index";
 import {FeatureSet} from "../../features";
+// Keep the Cygnus verifier and its wasm asset in the production build graph.
+import "../../matrix/cygnus/CygnusVerifier.js";
 
 // Don't use a default export here, as we use multiple entries during legacy build,
 // which does not support default exports,

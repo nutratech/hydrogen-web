@@ -71,7 +71,7 @@ export class BaseMessageTile extends SimpleTile {
     }
 
     get isOwn() {
-        return this._entry.sender === this._ownMember.userId;
+        return this._room.ownUserIds?.includes(this._entry.sender) || this._entry.sender === this._ownMember.userId;
     }
 
     get isContinuation() {

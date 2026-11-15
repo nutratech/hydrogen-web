@@ -26,6 +26,10 @@ export interface MemberData {
     avatarUrl: string;
     displayName: string;
     membership: "join" | "leave" | "invite" | "ban";
+    /** Cygnus: display_user_id from the newest m.room.user_epoch applied to this member. */
+    cygnusDisplayName?: string;
+    /** Cygnus: height of that epoch, so an older replay cannot replace it. */
+    cygnusEpochHeight?: number;
 }
 
 type MemberStorageEntry = MemberData & { key: string }

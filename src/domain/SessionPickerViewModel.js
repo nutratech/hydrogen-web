@@ -8,6 +8,7 @@ Please see LICENSE files in the repository root for full details.
 
 import {SortedArray} from "../observable";
 import {ViewModel} from "./ViewModel";
+import {isVisibleSessionInfo} from "../matrix/workspace/WorkspaceStorage.js";
 import {avatarInitials, getIdentifierColorNumber} from "./avatar";
 
 class SessionItemViewModel extends ViewModel {
@@ -70,7 +71,8 @@ export class SessionPickerViewModel extends ViewModel {
 
     // this loads all the sessions
     async load() {
-        const sessions = await this.platform.sessionInfoStorage.getAll();
+        const sessions = (await this.platform.sessionInfoStorage.getAll())
+            .filter(s => isVisibleSessionInfo(s, this.platform.workspaceStorage));
         this._sessions.setManyUnsorted(sessions.map(s => {
             return new SessionItemViewModel(this.childOptions({sessionInfo: s}), this);
         }));

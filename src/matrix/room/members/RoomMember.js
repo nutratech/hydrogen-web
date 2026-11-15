@@ -96,6 +96,16 @@ export class RoomMember {
         return this._data.userId;
     }
 
+    /** Height of the Cygnus user epoch that supplied the current display name, if any. */
+    get cygnusEpochHeight() {
+        return this._data.cygnusEpochHeight;
+    }
+
+    /** The display_user_id from that epoch, kept so a later member event does not hide it. */
+    get cygnusDisplayName() {
+        return this._data.cygnusDisplayName;
+    }
+
     serialize() {
         return this._data;
     }
@@ -107,7 +117,9 @@ export class RoomMember {
             data.userId === otherData.userId &&
             data.membership === otherData.membership &&
             data.displayName === otherData.displayName &&
-            data.avatarUrl === otherData.avatarUrl;
+            data.avatarUrl === otherData.avatarUrl &&
+            data.cygnusEpochHeight === otherData.cygnusEpochHeight &&
+            data.cygnusDisplayName === otherData.cygnusDisplayName;
     }
 }
 

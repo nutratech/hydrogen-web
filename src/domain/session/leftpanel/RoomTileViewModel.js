@@ -78,6 +78,8 @@ export class RoomTileViewModel extends BaseTileViewModel {
         return this._room.name || this.i18n`Empty Room`;
     }
 
+    get isCygnus() { return !!this._room.isCygnus; }
+
     get badgeCount() {
         return this._room.notificationCount;
     }

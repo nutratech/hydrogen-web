@@ -10,6 +10,7 @@ import {TemplateView} from "../../general/TemplateView";
 import {disableTargetCallback} from "../../general/utils";
 import {KeyBackupSettingsView} from "./KeyBackupSettingsView"
 import {FeaturesView} from "./FeaturesView"
+import {CygnusIdentityView} from "./CygnusIdentityView"
 
 export class SettingsView extends TemplateView {
     render(t, vm) {
@@ -44,6 +45,12 @@ export class SettingsView extends TemplateView {
             t.h3("Key backup & security"),
             t.view(new KeyBackupSettingsView(vm.keyBackupViewModel))
         );
+        if (vm.cygnusIdentityViewModel) {
+            settingNodes.push(
+                t.h3("Portable identity"),
+                t.view(new CygnusIdentityView(vm.cygnusIdentityViewModel))
+            );
+        }
 
         settingNodes.push(
             t.h3("Notifications"),

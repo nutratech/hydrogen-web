@@ -10,6 +10,7 @@ Please see LICENSE files in the repository root for full details.
 import {LeftPanelViewModel} from "./leftpanel/LeftPanelViewModel.js";
 import {RoomViewModel} from "./room/RoomViewModel.js";
 import {UnknownRoomViewModel} from "./room/UnknownRoomViewModel.js";
+import {UnavailableRoomViewModel} from "./room/UnavailableRoomViewModel.js";
 import {InviteViewModel} from "./room/InviteViewModel.js";
 import {RoomBeingCreatedViewModel} from "./room/RoomBeingCreatedViewModel.js";
 import {LightboxViewModel} from "./room/LightboxViewModel.js";
@@ -20,6 +21,8 @@ import {CreateRoomViewModel} from "./CreateRoomViewModel.js";
 import {JoinRoomViewModel} from "./JoinRoomViewModel";
 import {DeviceVerificationViewModel} from "./verification/DeviceVerificationViewModel";
 import {ViewModel} from "../ViewModel";
+import {RoomRouter} from "../../matrix/workspace/RoomRouter.js";
+import {WorkspaceRoomMap} from "../../matrix/workspace/WorkspaceRoomMap.js";
 import {RoomViewModelObservable} from "./RoomViewModelObservable.js";
 import {RightPanelViewModel} from "./rightpanel/RightPanelViewModel.js";
 import {SyncStatus} from "../../matrix/Sync.js";
@@ -28,14 +31,28 @@ import {ToastCollectionViewModel} from "./toast/ToastCollectionViewModel";
 export class SessionViewModel extends ViewModel {
     constructor(options) {
         super(options);
-        const {client} = options;
+        const {client, connections} = options;
         this._client = this.track(client);
+        // the workspace's live sessions (created by RootViewModel, which starts the
+        // secondary connections in the background); disposed with this view model
+        this._connections = connections ? this.track(connections) : null;
+        // which session owns each room
+        this._roomRouter = connections?.roomRouter ?? new RoomRouter({session: client.session});
         this._sessionStatusViewModel = this.track(new SessionStatusViewModel(this.childOptions({
             sync: client.sync,
             reconnector: client.reconnector,
             session: client.session,
+            connections,
         })));
-        this._leftPanelViewModel = this.track(new LeftPanelViewModel(this.childOptions({session: this._client.session})));
+        // one list across the workspace's connections, each room from its owner
+        this._leftPanelViewModel = this.track(new LeftPanelViewModel(this.childOptions({
+            roomLists: connections ? {
+                rooms: new WorkspaceRoomMap(this._roomRouter, s => s.rooms),
+                invites: new WorkspaceRoomMap(this._roomRouter, s => s.invites),
+                roomsBeingCreated: new WorkspaceRoomMap(this._roomRouter, s => s.roomsBeingCreated, {byOwner: false}),
+            } : undefined,
+            session: this._client.session,
+        })));
         this._settingsViewModel = null;
         this._roomViewModelObservable = null;
         this._gridViewModel = null;
@@ -106,6 +123,22 @@ export class SessionViewModel extends ViewModel {
 
         const rightpanel = this.navigation.observe("right-panel");
         this.track(rightpanel.subscribe(() => this._updateRightPanel()));
+        // a room can change owner while the panel is open; rebuild it for the
+        // current route rather than keep the previous session's room
+        this.track(this._roomRouter.subscribeChanges(() => {
+            if (!this.navigation.path.get("right-panel")?.value) {
+                return;
+            }
+            const roomId = this.navigation.path.get("room")?.value;
+            const session = this._roomRouter.sessionForRoom(roomId);
+            const room = session?.rooms.get(roomId);
+            if (!room) {
+                // no valid route remains: close the panel
+                this.navigation.applyPath(this.navigation.path.until("room"));
+            } else if (room !== this._rightPanelRoom || session !== this._rightPanelSession) {
+                this._updateRightPanel();
+            }
+        }));
         this._updateRightPanel();
     }
 
@@ -124,6 +157,17 @@ export class SessionViewModel extends ViewModel {
                 }
             }
         }));
+    }
+
+    /** The workspace's connections and their status, or `null` without a workspace. */
+    get connections() {
+        return this._connections;
+    }
+
+    /** The workspace this session opens; room ownership lives there. */
+    get workspace() {
+        // the router holds the current record; claiming a room replaces it
+        return this._roomRouter.workspace;
     }
 
     get id() {
@@ -228,10 +272,15 @@ export class SessionViewModel extends ViewModel {
         }
     }
 
+    get roomRouter() {
+        return this._roomRouter;
+    }
+
     _createRoomViewModelInstance(roomId) {
-        const room = this._client.session.rooms.get(roomId);
+        const session = this._roomRouter.sessionForRoom(roomId);
+        const room = session?.rooms.get(roomId);
         if (room) {
-            const roomVM = new RoomViewModel(this.childOptions({room, session: this._client.session}));
+            const roomVM = new RoomViewModel(this.childOptions({room, session}));
             roomVM.load();
             return roomVM;
         }
@@ -239,16 +288,22 @@ export class SessionViewModel extends ViewModel {
     }
 
     _createUnknownRoomViewModel(roomIdOrAlias) {
+        // joining it happens on the connection new rooms go to
         return new UnknownRoomViewModel(this.childOptions({
             roomIdOrAlias,
-            session: this._client.session,
+            session: this._roomRouter.sessionForNewRooms(),
         }));
     }
 
+    _createUnavailableRoomViewModel(roomId) {
+        return new UnavailableRoomViewModel(this.childOptions({roomId}));
+    }
+
     async _createArchivedRoomViewModel(roomId) {
-        const room = await this._client.session.loadArchivedRoom(roomId);
+        const session = this._roomRouter.sessionForRoom(roomId);
+        const room = await session?.loadArchivedRoom(roomId);
         if (room) {
-            const roomVM = new RoomViewModel(this.childOptions({room, session: this._client.session}));
+            const roomVM = new RoomViewModel(this.childOptions({room, session}));
             roomVM.load();
             return roomVM;
         }
@@ -256,22 +311,24 @@ export class SessionViewModel extends ViewModel {
     }
 
     _createInviteViewModel(roomId) {
-        const invite = this._client.session.invites.get(roomId);
+        const session = this._roomRouter.sessionForRoom(roomId);
+        const invite = session?.invites.get(roomId);
         if (invite) {
             return new InviteViewModel(this.childOptions({
                 invite,
-                mediaRepository: this._client.session.mediaRepository,
+                mediaRepository: session.mediaRepository,
             }));
         }
         return null;
     }
 
     _createRoomBeingCreatedViewModel(localId) {
-        const roomBeingCreated = this._client.session.roomsBeingCreated.get(localId);
+        const session = this._roomRouter.sessionForLocalId(localId);
+        const roomBeingCreated = session?.roomsBeingCreated.get(localId);
         if (roomBeingCreated) {
             return new RoomBeingCreatedViewModel(this.childOptions({
                 roomBeingCreated,
-                mediaRepository: this._client.session.mediaRepository,
+                mediaRepository: session.mediaRepository,
             }));
         }
         return null;
@@ -319,7 +376,7 @@ export class SessionViewModel extends ViewModel {
             this._createRoomViewModel = this.disposeTracked(this._createRoomViewModel);
         }
         if (createRoomOpen) {
-            this._createRoomViewModel = this.track(new CreateRoomViewModel(this.childOptions({session: this._client.session})));
+            this._createRoomViewModel = this.track(new CreateRoomViewModel(this.childOptions({session: this._roomRouter.sessionForNewRooms()})));
         }
         this.emitChange("activeMiddleViewModel");
     }
@@ -329,7 +386,7 @@ export class SessionViewModel extends ViewModel {
             this._joinRoomViewModel = this.disposeTracked(this._joinRoomViewModel);
         }
         if (joinRoomOpen) {
-            this._joinRoomViewModel = this.track(new JoinRoomViewModel(this.childOptions({session: this._client.session})));
+            this._joinRoomViewModel = this.track(new JoinRoomViewModel(this.childOptions({session: this._roomRouter.sessionForNewRooms()})));
         }
         this.emitChange("activeMiddleViewModel");
     }
@@ -362,16 +419,22 @@ export class SessionViewModel extends ViewModel {
 
     _roomFromNavigation() {
         const roomId = this.navigation.path.get("room")?.value;
-        const room = this._client.session.rooms.get(roomId);
-        return room;
+        return this._roomRouter.sessionForRoom(roomId)?.rooms.get(roomId);
     }
 
     _updateRightPanel() {
         this._rightPanelViewModel = this.disposeTracked(this._rightPanelViewModel);
         const enable = !!this.navigation.path.get("right-panel")?.value;
         if (enable) {
-            const room = this._roomFromNavigation();
-            this._rightPanelViewModel = this.track(new RightPanelViewModel(this.childOptions({room, session: this._client.session})));
+            const roomId = this.navigation.path.get("room")?.value;
+            const session = this._roomRouter.sessionForRoom(roomId);
+            const room = session?.rooms.get(roomId);
+            this._rightPanelRoom = room;
+            this._rightPanelSession = session;
+            this._rightPanelViewModel = this.track(new RightPanelViewModel(this.childOptions({room, session})));
+        } else {
+            this._rightPanelRoom = undefined;
+            this._rightPanelSession = undefined;
         }
         this.emitChange("rightPanelViewModel");
     }

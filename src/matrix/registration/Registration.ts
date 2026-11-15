@@ -37,14 +37,30 @@ export class Registration {
         this._flowSelector = flowSelector ?? (flows => flows[0]);
     }
 
-    async start(): Promise<BaseRegistrationStage> {
-        const response = await this._hsApi.register(
+    /** The first stage, or `undefined` when the homeserver registered the account without any (read `authData`). */
+    async start(): Promise<BaseRegistrationStage | undefined> {
+        const request = this._hsApi.register(
             this._accountDetails.username,
             this._accountDetails.password,
             this._accountDetails.initialDeviceDisplayName,
             undefined,
-            this._accountDetails.inhibitLogin).response();
+            this._accountDetails.inhibitLogin,
+            undefined,
+            this._accountDetails.deviceId);
+        const response = await request.response();
+        if (await request.responseCode() === 200) {
+            // the server needs no further stages; there is no stage to return, so say so plainly
+            this._acceptRegistration(response as RegistrationResponseSuccess);
+            return undefined;
+        }
         return this.parseStagesFromResponse(response);
+    }
+
+    private _acceptRegistration(response: RegistrationResponseSuccess): void {
+        if (this._accountDetails.deviceId && response.device_id !== this._accountDetails.deviceId) {
+            throw new Error(`homeserver assigned device ID ${response.device_id || "(none)"}; expected ${this._accountDetails.deviceId}`);
+        }
+        this._registerResponse = response;
     }
 
     /**
@@ -54,8 +70,8 @@ export class Registration {
      */
     async submitStage(stage: BaseRegistrationStage): Promise<BaseRegistrationStage | undefined> {
         const auth = stage.generateAuthenticationData();
-        const { username, password, initialDeviceDisplayName, inhibitLogin } = this._accountDetails;
-        const request = this._hsApi.register(username, password, initialDeviceDisplayName, auth, inhibitLogin);
+        const { username, password, initialDeviceDisplayName, inhibitLogin, deviceId } = this._accountDetails;
+        const request = this._hsApi.register(username, password, initialDeviceDisplayName, auth, inhibitLogin, undefined, deviceId);
         const response = await request.response();
         const status = await request.responseCode();
         const registrationResponse: RegistrationResponse = { ...response, status };
@@ -86,7 +102,7 @@ export class Registration {
     private async parseRegistrationResponse(response: RegistrationResponse, currentStage: BaseRegistrationStage) {
         switch (response.status) {
             case 200:
-                this._registerResponse = response;
+                this._acceptRegistration(response);
                 return undefined;
             case 401:
                 if (response.completed?.includes(currentStage.type)) {

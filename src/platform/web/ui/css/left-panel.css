@@ -50,3 +50,16 @@ Please see LICENSE files in the repository root for full details.
     text-overflow: ellipsis;
     flex: 1;
 }
+
+.RoomList .RoomTileView_cygnus {
+    flex: 0 0 auto;
+    align-self: center;
+    margin-left: 4px;
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: 0.7em;
+    font-weight: bold;
+    line-height: 1.6;
+    color: var(--background-color-primary, #fff);
+    background: var(--accent-color, #0dbd8b);
+}

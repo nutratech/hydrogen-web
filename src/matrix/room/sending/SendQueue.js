@@ -14,7 +14,7 @@ import {REDACTION_TYPE} from "../common";
 import {getRelationFromContent, getRelationTarget, setRelationTarget, REACTION_TYPE, ANNOTATION_RELATION_TYPE} from "../timeline/relations.js";
 
 export class SendQueue {
-    constructor({roomId, storage, hsApi, pendingEvents}) {
+    constructor({roomId, storage, hsApi, pendingEvents, getSignedSender}) {
         pendingEvents = pendingEvents || [];
         this._roomId = roomId;
         this._storage = storage;
@@ -25,6 +25,7 @@ export class SendQueue {
         this._offline = false;
         this._roomEncryption = null;
         this._currentQueueIndex = 0;
+        this._getSignedSender = getSignedSender;
     }
 
     _createPendingEvent(data, attachments = null) {
@@ -96,7 +97,7 @@ export class SendQueue {
             await this._tryUpdateEvent(pendingEvent);
         }
         if (pendingEvent.needsSending) {
-            await pendingEvent.send(this._hsApi, log);
+            await pendingEvent.send(this._hsApi, log, this._getSignedSender?.());
             // we now have a remoteId, but this pending event may be removed at any point in the future
             // (or past, so can't assume it still exists) once the remote echo comes in.
             // So if we have any related events that need to resolve the relatedTxnId to a related event id,

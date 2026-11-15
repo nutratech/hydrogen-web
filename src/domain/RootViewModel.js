@@ -14,6 +14,8 @@ import {LogoutViewModel} from "./LogoutViewModel";
 import {ForcedLogoutViewModel} from "./ForcedLogoutViewModel";
 import {SessionPickerViewModel} from "./SessionPickerViewModel.js";
 import {ViewModel} from "./ViewModel";
+import {isVisibleSessionInfo} from "../matrix/workspace/WorkspaceStorage.js";
+import {WorkspaceConnections} from "../matrix/workspace/WorkspaceConnections.js";
 
 export class RootViewModel extends ViewModel {
     constructor(options) {
@@ -59,6 +61,31 @@ export class RootViewModel extends ViewModel {
                 this._showPicker();
             }
         } else if (sessionId) {
+            const navigationSessionId = sessionId;
+            // a workspace's secondary connection is opened through its workspace, never on its own
+            let sourceSessionId;
+            try {
+                sourceSessionId = await this._sourceSessionIdForHidden(sessionId);
+            } catch (err) {
+                // an obsolete request must not replace the view of a newer navigation
+                if (this.navigation.path.get("session")?.value === navigationSessionId) {
+                    this._setSection(() => this._error = err);
+                }
+                return;
+            }
+            if (this.navigation.path.get("session")?.value !== navigationSessionId) {
+                return;
+            }
+            if (sourceSessionId) {
+                // keep the rest of the URL (e.g. the room from a notification click)
+                const path = this.navigation.path.replace(this.navigation.segment("session", sourceSessionId));
+                if (path) {
+                    this.navigation.applyPath(path);
+                } else {
+                    this.navigation.push("session", sourceSessionId);
+                }
+                return;
+            }
             if (!this._sessionViewModel || this._sessionViewModel.id !== sessionId) {
                 // see _showLogin for where _pendingClient comes from
                 if (this._pendingClient && this._pendingClient.sessionId === sessionId) {
@@ -83,7 +110,8 @@ export class RootViewModel extends ViewModel {
         else {
             try {
                 if (!(shouldRestoreLastUrl && this.urlRouter.tryRestoreLastUrl())) {
-                    const sessionInfos = await this.platform.sessionInfoStorage.getAll();
+                    const sessionInfos = (await this.platform.sessionInfoStorage.getAll())
+                        .filter(s => isVisibleSessionInfo(s, this.platform.workspaceStorage));
                     if (sessionInfos.length === 0) {
                         this.navigation.push("login");
                     } else if (sessionInfos.length === 1) {
@@ -142,11 +170,44 @@ export class RootViewModel extends ViewModel {
         });
     }
 
+    /** For a hidden (secondary) session, the session that opens its workspace. */
+    async _sourceSessionIdForHidden(sessionId) {
+        const sessionInfo = await this.platform.sessionInfoStorage.get(sessionId);
+        // a hidden session no workspace references is visible again (see isVisibleSessionInfo)
+        if (!sessionInfo || isVisibleSessionInfo(sessionInfo, this.platform.workspaceStorage)) {
+            return undefined;
+        }
+        const sourceSessionId = this.platform.workspaceStorage?.forSession(sessionId)?.sourceSessionId;
+        return sourceSessionId !== sessionId ? sourceSessionId : undefined;
+    }
+
     _showSession(client) {
+        let connections;
+        try {
+            // created lazily on first open, never from the picker
+            const workspace = this.platform.workspaceStorage?.ensureForSession(client.sessionId);
+            if (workspace) {
+                connections = new WorkspaceConnections({
+                    workspace,
+                    workspaceStorage: this.platform.workspaceStorage,
+                    sessionInfoStorage: this.platform.sessionInfoStorage,
+                    sourceClient: client,
+                    createClient: () => new Client(this.platform, this.features),
+                });
+            }
+        } catch (err) {
+            // the loaders gave up ownership of the client
+            client.dispose();
+            this._setSection(() => this._error = err);
+            return;
+        }
         this._setSection(() => {
-            this._sessionViewModel = new SessionViewModel(this.childOptions({client}));
+            this._sessionViewModel = new SessionViewModel(this.childOptions({client, connections}));
             this._sessionViewModel.start();
         });
+        // the source is shown already; the other connections come up in the
+        // background and a failed one is marked unavailable, never blocking it
+        connections?.start();
     }
 
     _showSessionLoader(sessionId) {

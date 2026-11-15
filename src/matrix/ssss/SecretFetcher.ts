@@ -17,6 +17,10 @@ export class SecretFetcher {
     public secretStorage: SecretStorage;
     public secretSharing: SecretSharing;
 
+    get hasSecretStorage(): boolean {
+        return !!this.secretStorage;
+    }
+
     async getSecret(name: string): Promise<string | undefined> {
         /**
          * Note that we don't ask another device for secret here;
@@ -28,11 +32,32 @@ export class SecretFetcher {
             await this.secretSharing?.getLocallyStoredSecret(name);
     } 
 
-    setSecretStorage(storage: SecretStorage) {
+    setSecretStorage(storage: SecretStorage): void {
         this.secretStorage = storage;
     }
 
-    setSecretSharing(sharing: SecretSharing) {
+    async readSecretStorage(name: string): Promise<string | undefined> {
+        if (!this.secretStorage) {
+            throw new Error("unlock secret storage before using the Cygnus rotation key");
+        }
+        return await this.secretStorage.readSecret(name);
+    }
+
+    async writeSecret(name: string, secret: string, log?: object): Promise<void> {
+        if (!this.secretStorage) {
+            throw new Error("unlock secret storage before saving this secret");
+        }
+        await this.secretStorage.writeSecret(name, secret, log);
+    }
+
+    async deleteSecret(name: string, log?: object): Promise<void> {
+        if (!this.secretStorage) {
+            throw new Error("unlock secret storage before removing this secret");
+        }
+        await this.secretStorage.deleteSecret(name, log);
+    }
+
+    setSecretSharing(sharing: SecretSharing): void {
         this.secretSharing = sharing;
         /**
          * SecretSharing also needs to respond to secret requests

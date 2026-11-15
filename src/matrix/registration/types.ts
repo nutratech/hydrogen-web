@@ -11,6 +11,7 @@ export type AccountDetails = {
     password: string;
     initialDeviceDisplayName: string;
     inhibitLogin: boolean;
+    deviceId?: string;
 } 
 
 export type RegistrationResponse = RegistrationResponseMoreDataNeeded | RegistrationResponseSuccess;

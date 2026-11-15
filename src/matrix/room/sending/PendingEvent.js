@@ -196,11 +196,28 @@ export class PendingEvent {
         return this._aborted;
     }
 
-    async send(hsApi, log) {
+    /**
+     * @param {Function} [sendSigned] `(eventType, content, txnId, log) => Promise<eventId>`, set for
+     *     MSC00FC rooms where the device signs every event instead of calling `/send`.
+     */
+    async send(hsApi, log, sendSigned) {
         this._status = SendStatus.Sending;
         this._emitUpdate("status");
         const eventType = this._data.encryptedEventType || this._data.eventType;
         const content = this._data.encryptedContent || this._data.content;
+        if (sendSigned) {
+            // room v11+ (and so Cygnus) carries `redacts` in the content
+            const signedContent = eventType === REDACTION_TYPE
+                ? {...content, redacts: this._data.relatedEventId}
+                : content;
+            const eventId = await sendSigned(eventType, signedContent, this.txnId, log);
+            this._data.remoteId = eventId;
+            this._deferred.resolve(eventId);
+            log.set("id", eventId);
+            this._status = SendStatus.Sent;
+            this._emitUpdate("status");
+            return;
+        }
         if (eventType === REDACTION_TYPE) {
             this._sendRequest = hsApi.redact(
                     this.roomId,

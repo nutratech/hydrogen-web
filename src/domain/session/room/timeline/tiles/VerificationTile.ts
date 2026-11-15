@@ -84,7 +84,7 @@ export class VerificationTile extends SimpleTile {
             switch (e.eventType) {
                 case VerificationEventType.Cancel:
                     this.status = Status.Cancelled;
-                    this.isCancelledByUs = e.sender === this.getOption("session").userId;
+                    this.isCancelledByUs = this._room.ownUserIds?.includes(e.sender) || e.sender === this.getOption("session").userId;
                     return true;
                 case VerificationEventType.Done:
                     this.status = Status.Completed;

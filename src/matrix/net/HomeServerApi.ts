@@ -19,6 +19,8 @@ type RequestMethod = "POST" | "GET" | "PUT";
 
 const CS_R0_PREFIX = "/_matrix/client/r0";
 const CS_V3_PREFIX = "/_matrix/client/v3";
+/** MSC00FC (Cygnus) unstable client-server prefix. */
+const CYGNUS_PREFIX = "/_matrix/client/unstable/tk.nutra.cygnus";
 const DEHYDRATION_PREFIX = "/_matrix/client/unstable/org.matrix.msc2697.v2";
 
 type Options = {
@@ -168,7 +170,7 @@ export class HomeServerApi {
         return this._unauthedRequest("GET", this._url("/login"));
     }
 
-    register(username: string | null, password: string, initialDeviceDisplayName: string, auth?: Record<string, any>, inhibitLogin: boolean = false , options: BaseRequestOptions = {}): IHomeServerRequest {
+    register(username: string | null, password: string, initialDeviceDisplayName: string, auth?: Record<string, any>, inhibitLogin: boolean = false , options: BaseRequestOptions = {}, deviceId?: string): IHomeServerRequest {
         options.allowedStatusCodes = [401];
         const body: any = {
             auth,
@@ -180,11 +182,14 @@ export class HomeServerApi {
             // username is optional for registration
             body.username = username;
         }
+        if (deviceId) {
+            body.device_id = deviceId;
+        }
         return this._unauthedRequest( "POST", this._url("/register", CS_V3_PREFIX), undefined, body, options);
     }
 
-    passwordLogin(username: string, password: string, initialDeviceDisplayName: string, options?: BaseRequestOptions): IHomeServerRequest {
-        return this._unauthedRequest("POST", this._url("/login"), undefined, {
+    passwordLogin(username: string, password: string, initialDeviceDisplayName: string, options?: BaseRequestOptions, deviceId?: string): IHomeServerRequest {
+        const body: Record<string, any> = {
           "type": "m.login.password",
           "identifier": {
             "type": "m.id.user",
@@ -192,11 +197,13 @@ export class HomeServerApi {
           },
           "password": password,
           "initial_device_display_name": initialDeviceDisplayName
-        }, options);
+        };
+        if (deviceId) body.device_id = deviceId;
+        return this._unauthedRequest("POST", this._url("/login"), undefined, body, options);
     }
 
-    tokenLogin(loginToken: string, txnId: string, initialDeviceDisplayName: string, options?: BaseRequestOptions): IHomeServerRequest {
-        return this._unauthedRequest("POST", this._url("/login"), undefined, {
+    tokenLogin(loginToken: string, txnId: string, initialDeviceDisplayName: string, options?: BaseRequestOptions, deviceId?: string): IHomeServerRequest {
+        const body: Record<string, any> = {
           "type": "m.login.token",
           "identifier": {
             "type": "m.id.user",
@@ -204,7 +211,9 @@ export class HomeServerApi {
           "token": loginToken,
           "txn_id": txnId,
           "initial_device_display_name": initialDeviceDisplayName
-        }, options);
+        };
+        if (deviceId) body.device_id = deviceId;
+        return this._unauthedRequest("POST", this._url("/login"), undefined, body, options);
     }
 
     createFilter(userId: string, filter: Record<string, any>, options?: BaseRequestOptions): IHomeServerRequest {
@@ -225,6 +234,11 @@ export class HomeServerApi {
 
     uploadSignatures(payload: Record<string, any>, options?: BaseRequestOptions): IHomeServerRequest {
         return this._post("/keys/signatures/upload", {}, payload, options);
+    }
+
+    /** Publish cross-signing keys. 401 is allowed: the first call returns the UIA session and flows. */
+    uploadCrossSigningKeys(payload: Record<string, any>, options: BaseRequestOptions = {}): IHomeServerRequest {
+        return this._post("/keys/device_signing/upload", {}, payload, {...options, prefix: CS_V3_PREFIX, allowedStatusCodes: [401]});
     }
 
     queryKeys(queryRequest: Record<string, any>, options?: BaseRequestOptions): IHomeServerRequest {
@@ -291,6 +305,36 @@ export class HomeServerApi {
 
     forget(roomId: string, options?: BaseRequestOptions): IHomeServerRequest {
         return this._post(`/rooms/${encodeURIComponent(roomId)}/forget`, {}, {}, options);
+    }
+
+    /** MSC00FC §7: ask the custodian to mint a user genesis link committing to `masterKey` and `nextCommit`. */
+    cygnusCreatePrincipal(masterKey: string, nextCommit: string, options?: BaseRequestOptions): IHomeServerRequest {
+        return this._post("/principal", {}, {master_key: masterKey, next_commit: nextCommit}, {...options, prefix: CYGNUS_PREFIX});
+    }
+
+    /** MSC00FC §7: hand user-signed links (a move or advancement) to the custodian. */
+    cygnusImportPrincipal(links: string[], revokedDeviceIds: string[], options?: BaseRequestOptions): IHomeServerRequest {
+        return this._post("/principal/import", {}, {links, revoked_device_ids: revokedDeviceIds}, {...options, prefix: CYGNUS_PREFIX});
+    }
+
+    /** MSC00FC §9: resolve a Matrix user ID to its principal. */
+    cygnusLookupPrincipal(userId: string, options?: BaseRequestOptions): IHomeServerRequest {
+        return this._get("/principal", {user_id: userId}, undefined, {...options, prefix: CYGNUS_PREFIX});
+    }
+
+    /** MSC00FC §9: the room's extremities and the events a sender's `auth_events` can cite. */
+    cygnusTipBundle(roomId: string, options?: BaseRequestOptions): IHomeServerRequest {
+        return this._get(`/tip_bundle/${encodeURIComponent(roomId)}`, undefined, undefined, {...options, prefix: CYGNUS_PREFIX});
+    }
+
+    /** MSC00FC §9 assisted mode: ask the homeserver to propose an event signing object. */
+    cygnusEventDraft(draft: Record<string, any>, options?: BaseRequestOptions): IHomeServerRequest {
+        return this._post("/event_draft", {}, draft, {...options, prefix: CYGNUS_PREFIX});
+    }
+
+    /** MSC00FC §9: submit a device-signed event for the custodian to co-sign and federate. */
+    cygnusSendSigned(txnId: string, event: Record<string, any>, options?: BaseRequestOptions): IHomeServerRequest {
+        return this._put(`/send_signed/${encodeURIComponent(txnId)}`, {}, {event}, {...options, prefix: CYGNUS_PREFIX});
     }
 
     logout(options?: BaseRequestOptions): IHomeServerRequest {

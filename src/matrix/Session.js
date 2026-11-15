@@ -41,6 +41,8 @@ import {
     SecretFetcher
 } from "./ssss/index";
 import {ObservableValue, RetainedObservableValue} from "../observable/value";
+import {CygnusService} from "./cygnus/CygnusService.js";
+import {DMLS_EVENT_TYPES} from "./cygnus/DmlsService.js";
 import {CallHandler} from "./calls/CallHandler";
 import {RoomStateHandlerSet} from "./room/state/RoomStateHandlerSet";
 
@@ -104,8 +106,26 @@ export class Session {
         this._forgetArchivedRoom = this._forgetArchivedRoom.bind(this);
         this.needsKeyBackup = new ObservableValue(false);
         this._secretFetcher = new SecretFetcher();
+        this._cygnus = features.cygnus ? new CygnusService({
+            storage,
+            hsApi,
+            secretFetcher: this._secretFetcher,
+            userId: sessionInfo.userId,
+            deviceId: sessionInfo.deviceId,
+            olm,
+            getRandomValues: bytes => self.crypto.getRandomValues(bytes),
+            subtleCrypto: self.crypto.subtle || self.crypto.webkitSubtle,
+        }) : undefined;
         this._secretSharing = null;
         this._secretStorage = null;
+        if (this._cygnus) {
+            this._deviceMessageHandler.on("message", ({unencrypted}) => {
+                if (unencrypted?.type === DMLS_EVENT_TYPES.welcome) {
+                    this._platform.logger.run("dmls welcome", log =>
+                        this._cygnus.dmls.handleToDevice(unencrypted).catch(err => log.catch(err)));
+                }
+            });
+        }
     }
 
     get fingerprintKey() {
@@ -337,7 +357,7 @@ export class Session {
 
     _tryLoadSecretStorage(ssssKey, log) {
         return log.wrap("enable secret storage", async log => {
-            const secretStorage = new SecretStorage({key: ssssKey, platform: this._platform, storage: this._storage});
+            const secretStorage = new SecretStorage({key: ssssKey, platform: this._platform, storage: this._storage, hsApi: this._hsApi, userId: this._user.id});
             const isValid = await secretStorage.hasValidKeyForAnyAccountData();
             log.set("isValid", isValid);
             if (isValid) {
@@ -395,6 +415,11 @@ export class Session {
 
     get secretFetcher() {
         return this._secretFetcher;
+    }
+
+    /** MSC00FC support, or `undefined` when the Cygnus feature is off. */
+    get cygnus() {
+        return this._cygnus;
     }
 
     get hasIdentity() {
@@ -480,6 +505,7 @@ export class Session {
 
     /** @internal */
     async load(log) {
+        await this._cygnus?.loadStoredIdentity().catch(err => log.catch(err));
         const txn = await this._storage.readTxn([
             this._storage.storeNames.session,
             this._storage.storeNames.roomSummary,
@@ -490,6 +516,7 @@ export class Session {
             this._storage.storeNames.pendingEvents,
             this._storage.storeNames.accountData,
             this._storage.storeNames.crossSigningKeys,
+            this._storage.storeNames.roomState,
         ]);
         // restore session object
         this._syncInfo = await txn.session.get("sync");
@@ -615,6 +642,10 @@ export class Session {
         }
         await this._keyBackup.get()?.start(log);
         await this._crossSigning.get()?.start(log);
+        if (this._cygnus) {
+            // after serverVersions is stored, so support detection sees it
+            await log.wrap("cygnus", log => this._cygnus.load(log).catch(err => log.catch(err)));
+        }
         
         // restore unfinished operations, like sending out room keys
         const opsTxn = await this._storage.readWriteTxn([
@@ -676,7 +707,8 @@ export class Session {
             user: this._user,
             createRoomEncryption: this._createRoomEncryption,
             platform: this._platform,
-            roomStateHandler: this._roomStateHandler
+            roomStateHandler: this._roomStateHandler,
+            getCygnus: () => this._cygnus,
         });
     }
 
@@ -693,7 +725,8 @@ export class Session {
             mediaRepository: this._mediaRepository,
             user: this._user,
             createRoomEncryption: this._createRoomEncryption,
-            platform: this._platform
+            platform: this._platform,
+            getCygnus: () => this._cygnus
         });
         this._activeArchivedRooms.set(roomId, room);
         return room;
@@ -708,6 +741,7 @@ export class Session {
         return new Invite({
             roomId,
             hsApi: this._hsApi,
+            getCygnus: () => this._cygnus,
             emitCollectionUpdate: this._inviteUpdateCallback,
             mediaRepository: this._mediaRepository,
             user: this._user,

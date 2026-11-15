@@ -43,7 +43,7 @@ export class RoomViewModel extends ErrorReportViewModel {
     }
 
     _setupCallViewModel() {
-        if (!this.features.calls) {
+        if (!this.features.calls || this._room.isCygnus) {
             return;
         }
         // pick call for this room with lowest key
@@ -161,6 +161,8 @@ export class RoomViewModel extends ErrorReportViewModel {
     get closeUrl() { return this._closeUrl; }
     get name() { return this._room.name || this.i18n`Empty Room`; }
     get id() { return this._room.id; }
+    get isCygnus() { return !!this._room.isCygnus; }
+    get roomVersion() { return this._room.roomVersion; }
     get timelineViewModel() { return this._timelineVM; }
     get isEncrypted() { return this._room.isEncrypted; }
 

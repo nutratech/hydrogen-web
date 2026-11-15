@@ -16,6 +16,7 @@ export class ArchivedRoom extends BaseRoom {
         // archived rooms are reference counted,
         // as they are not kept in memory when not needed
         this._releaseCallback = options.releaseCallback;
+        this._getCygnus = options.getCygnus;
         this._forgetCallback = options.forgetCallback;
         this._retentionCount = 1;
         /**
@@ -59,7 +60,7 @@ export class ArchivedRoom extends BaseRoom {
     async writeSync(joinedSummaryData, roomResponse, membership, txn, log) {
         log.set("id", this.id);
         if (membership === "leave") {
-            const newKickDetails = findKickDetails(roomResponse, this._user.id);
+            const newKickDetails = findKickDetails(roomResponse, this.ownUserIds);
             if (newKickDetails || joinedSummaryData) {
                 const kickDetails = newKickDetails || this._kickDetails;
                 let kickedBy;
@@ -159,6 +160,12 @@ export class ArchivedRoom extends BaseRoom {
 
     join(log = null) {
         return this._platform.logger.wrapOrRun(log, "rejoin archived room", async log => {
+            if (this.isCygnus) {
+                const cygnus = this._getCygnus?.();
+                if (!cygnus) throw new Error("Cygnus is unavailable for this room");
+                await cygnus.joinRoom(this.id, log);
+                return;
+            }
             await this._hsApi.join(this.id, {log}).response();
         });
     }
@@ -169,7 +176,8 @@ function findKickDetails(roomResponse, ownUserId) {
     iterateResponseStateEvents(roomResponse, event => {
         if (event.type === MEMBER_EVENT_TYPE) {
             // did we get kicked?
-            if (event.state_key === ownUserId && event.sender !== event.state_key) {
+            const isOwnStateKey = Array.isArray(ownUserId) ? ownUserId.includes(event.state_key) : event.state_key === ownUserId;
+            if (isOwnStateKey && event.sender !== event.state_key) {
                 kickEvent = event;
             }
         }

@@ -21,7 +21,8 @@ export class RoomTileView extends TemplateView {
             t.a({href: vm.url}, [
                 t.view(new AvatarView(vm, 32), {parentProvidesUpdates: true}),
                 t.div({className: "description"}, [
-                    t.div({className: {"name": true, unread: vm => vm.isUnread}}, vm => vm.name),
+                    t.div({className: {"name": true, unread: vm => vm.isUnread}}, t.span(vm => vm.name)),
+                    t.if(vm => vm.isCygnus, t => t.span({className: "RoomTileView_cygnus", title: vm.i18n`Cygnus room`}, "C")),
                     t.map(vm => vm.busy, busy => {
                         if (busy) {
                             return spinner(t);

@@ -8,6 +8,7 @@ Please see LICENSE files in the repository root for full details.
 
 import {RoomView} from "./room/RoomView.js";
 import {RoomBeingCreatedView} from "./room/RoomBeingCreatedView.js";
+import {UnavailableRoomView} from "./room/UnavailableRoomView.js";
 import {InviteView} from "./room/InviteView.js";
 import {TemplateView} from "../general/TemplateView";
 import {StaticView} from "../general/StaticView.js";
@@ -35,6 +36,8 @@ export class RoomGridView extends TemplateView {
                         return new RoomBeingCreatedView(roomVM);
                     } else if (roomVM.kind === "invite") {
                         return new InviteView(roomVM);
+                    } else if (roomVM.kind === "unavailable") {
+                        return new UnavailableRoomView(roomVM);
                     } else {
                         return new RoomView(roomVM, this._viewClassForTile);
                     }

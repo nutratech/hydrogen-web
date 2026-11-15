@@ -33,6 +33,9 @@ export class RoomDetailsViewModel extends ViewModel {
         return this._room.id;
     }
 
+    get isCygnus() { return !!this._room.isCygnus; }
+    get roomVersion() { return this._room.roomVersion; }
+
     get canonicalAlias() {
         return this._room.canonicalAlias;
     }
